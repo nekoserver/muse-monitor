@@ -63,9 +63,12 @@ const SECTIONS = new Set([
 
 export class MonitorGateway extends DurableObject<Env> {
   private ipn: IPN | null = null;
-  private ready: Promise<void> | null = null;
-  private readyResolve: (() => void) | null = null;
-  private readyReject: ((err: Error) => void) | null = null;
+  /** Single flight for creating the node: concurrent requests share one start. */
+  private starting: Promise<IPN> | null = null;
+  /** Requests waiting for the node to reach Running (resolved/rejected by the callbacks). */
+  private waiters = new Set<{ resolve(): void; reject(err: Error): void }>();
+  /** A panic reported while nobody was waiting; the next wait reports it. */
+  private pendingPanic: string | null = null;
   private state = new Map<string, string>();
   private stateLoaded = false;
   private flushPending: Promise<void> | null = null;
@@ -77,10 +80,6 @@ export class MonitorGateway extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.ready = new Promise<void>((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
-    });
   }
 
   private async loadState(): Promise<void> {
@@ -102,8 +101,60 @@ export class MonitorGateway extends DurableObject<Env> {
     this.ctx.waitUntil(this.flushPending);
   }
 
+  /**
+   * Return the node once it is Running. The node is created once and then
+   * kept (its identity lives in the persisted state); every call waits for
+   * Running on its own, up to 60 s, so a node that is still waiting for
+   * login approval, or that reported a panic, is never used as if it were
+   * up, and a later approval makes the same node usable again.
+   */
   private async ensureNode(): Promise<IPN> {
-    if (this.ipn) return this.ipn;
+    if (!this.ipn) {
+      this.starting ??= this.startNode().finally(() => {
+        this.starting = null;
+      });
+      await this.starting;
+    }
+    const ipn = this.ipn!;
+    if (this.lastStatus !== "Running") await this.waitForRunning();
+    return ipn;
+  }
+
+  private waitForRunning(): Promise<void> {
+    if (this.pendingPanic !== null) {
+      const error = this.pendingPanic;
+      this.pendingPanic = null;
+      return Promise.reject(new Error(error));
+    }
+    return new Promise<void>((resolve, reject) => {
+      const waiter = {
+        resolve: () => {
+          clearTimeout(timer);
+          this.waiters.delete(waiter);
+          resolve();
+        },
+        reject: (err: Error) => {
+          clearTimeout(timer);
+          this.waiters.delete(waiter);
+          reject(err);
+        },
+      };
+      const timer = setTimeout(
+        () =>
+          waiter.reject(
+            new Error(
+              this.browseUrl
+                ? `tailscale node is waiting for interactive login approval: ${this.browseUrl}`
+                : `tailscale node did not reach Running in 60s (state: ${this.lastStatus})`,
+            ),
+          ),
+        60_000,
+      );
+      this.waiters.add(waiter);
+    });
+  }
+
+  private async startNode(): Promise<IPN> {
     await this.loadState();
 
     const go = new Go();
@@ -126,12 +177,13 @@ export class MonitorGateway extends DurableObject<Env> {
       throw new Error(`newIPN failed: ${created.message}`);
     }
     const ipn = created;
-    this.ipn = ipn;
 
     const callbacks: IPNCallbacks = {
       notifyState: (state: string) => {
         this.lastStatus = state;
-        if (state === "Running") this.readyResolve?.();
+        if (state !== "Running") return;
+        this.pendingPanic = null;
+        for (const w of [...this.waiters]) w.resolve();
       },
       notifyNetMap: (netMap: string) => {
         this.peers = parsePeers(netMap);
@@ -141,26 +193,13 @@ export class MonitorGateway extends DurableObject<Env> {
       },
       notifyPanicRecover: (error: string) => {
         this.lastError = error;
-        this.readyReject?.(new Error(error));
+        if (this.waiters.size === 0) this.pendingPanic = error;
+        for (const w of [...this.waiters]) w.reject(new Error(error));
       },
     };
     ipn.run(callbacks);
+    this.ipn = ipn;
     ipn.login(this.env.TS_AUTHKEY);
-
-    const timeout = new Promise<void>((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              this.browseUrl
-                ? `tailscale node is waiting for interactive login approval: ${this.browseUrl}`
-                : "tailscale node did not reach Running in 60s",
-            ),
-          ),
-        60_000,
-      ),
-    );
-    await Promise.race([this.ready, timeout]);
     return ipn;
   }
 

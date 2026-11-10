@@ -49,12 +49,16 @@ export function parsePeers(netMapJson: string): PeerCandidate[] {
     }
     const rec = value as Record<string, unknown>;
     const name = rec["Name"] ?? rec["name"];
-    const ips = rec["TailscaleIPs"] ?? rec["tailscaleIPs"] ?? rec["Addresses"];
+    // The WASM node (tsconnect jsNetMapNode) serializes "addresses"; the
+    // other spellings come from the Go/LocalAPI status shapes.
+    const ips =
+      rec["addresses"] ?? rec["Addresses"] ?? rec["TailscaleIPs"] ?? rec["tailscaleIPs"];
     if (typeof name === "string" && Array.isArray(ips)) {
       const label = name.split(".")[0].replace(/\.$/, "");
-      const ip = ips.find(
-        (a): a is string => typeof a === "string" && a.includes("."),
-      );
+      const ip = ips
+        .filter((a): a is string => typeof a === "string")
+        .map((a) => a.split("/")[0])
+        .find((a) => a.includes("."));
       if (label && ip && !seen.has(label)) {
         seen.add(label);
         out.push({ name: label, ip });

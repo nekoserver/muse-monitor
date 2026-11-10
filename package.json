@@ -1,1 +1,19 @@
-{"dependencies":{"@ai-ecoverse/wasm-tailscale":"1.104.1-13"},"description":"Minimal standalone Worker serving a read-only Muse system monitor dashboard, fed through a Tailscale WASM node (Durable Object) from the shared receiver on muse-vm.","devDependencies":{"@cloudflare/workers-types":"^4.20251109.0","typescript":"^7.0.2"},"name":"muse-monitor","private":true,"scripts":{"typecheck":"tsc -p tsconfig.json"},"type":"module","version":"0.1.0"}
+{
+  "dependencies": {
+    "@ai-ecoverse/wasm-tailscale": "1.104.1-13"
+  },
+  "description": "Minimal standalone Worker serving a read-only Muse system monitor dashboard, fed through a Tailscale WASM node (Durable Object) from the shared receiver on muse-vm.",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251109.0",
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.4"
+  },
+  "name": "muse-monitor",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "type": "module",
+  "version": "0.1.0"
+}
