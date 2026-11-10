@@ -2,13 +2,8 @@ name = "muse-monitor"
 main = "src/index.ts"
 compatibility_date = "2026-11-10"
 
-# The shared receiver on muse-vm (tailnet node 100.86.29.77). Reached
-# through the WASM node's tailnet transport, never through the public
-# internet. Same receiver as muse-code-wasm; this Worker only uses its
-# read-only GET /monitor/<section> endpoints.
-[vars]
-TS_HOST_URL = "http://100.86.29.77:8090"
-
+# The receiver address (muse-vm, tailnet :8090) is a fixed counterpart
+# and is held as a constant in src/do.ts, not as a variable here.
 [durable_objects]
 bindings = [
   { name = "MONITOR_GATEWAY", class_name = "MonitorGateway" }

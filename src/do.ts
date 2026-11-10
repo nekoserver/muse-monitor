@@ -28,8 +28,11 @@ import type {
 interface Env {
   TS_AUTHKEY: string;
   TS_API_KEY: string;
-  TS_HOST_URL: string;
 }
+
+// The receiver is a fixed counterpart (muse-vm, tailnet :8090), shared
+// with muse-code-wasm. It is a constant, not configuration.
+const TS_HOST_URL = "http://100.86.29.77:8090";
 
 const STATE_KEY = "ts-state";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -152,7 +155,7 @@ export class MonitorGateway extends DurableObject<Env> {
         { status: 502 },
       );
     }
-    const url = `${this.env.TS_HOST_URL.replace(/\/$/, "")}/monitor/${section}`;
+    const url = `${TS_HOST_URL.replace(/\/$/, "")}/monitor/${section}`;
     let resp;
     try {
       resp = await ipn.fetch({

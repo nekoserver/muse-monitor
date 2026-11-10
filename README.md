@@ -74,7 +74,8 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 | `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
 
-受信 API のアドレスは `wrangler.toml` の `TS_HOST_URL` で指定します。
+受信 API のアドレス（muse-vm、tailnet :8090）は固定の相手のため、
+`src/do.ts` 内の定数として持ちます。
 
 ## デプロイ
 

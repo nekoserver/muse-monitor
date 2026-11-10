@@ -20,7 +20,6 @@ interface Env {
   MONITOR_GATEWAY: DurableObjectNamespace;
   WORKER_API_KEY: string;
   TS_API_KEY: string;
-  TS_HOST_URL: string;
   TS_AUTHKEY: string;
   MONITOR_HMAC_SECRET: string;
 }
