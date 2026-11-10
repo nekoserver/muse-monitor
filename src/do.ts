@@ -42,6 +42,10 @@ interface Env {
 // (muse-vm-1, muse-vm-2, ...). The concrete peer is therefore resolved
 // at runtime from this node's own netmap, and confirmed by probing the
 // receiver's /health (see resolveReceiver below).
+// This node's own tailnet hostname. Not the Worker name: the Worker
+// name lives only in wrangler.toml's `name` and code cannot read it.
+// The two strings match by choice, not by mechanism.
+const NODE_HOSTNAME = "muse-monitor";
 const RECEIVER_NAME = "muse-vm";
 const RECEIVER_PORT = 8090;
 
@@ -104,7 +108,7 @@ export class MonitorGateway extends DurableObject<Env> {
     void go.run(instance);
     const created = newIPN({
       authKey: this.env.TS_AUTHKEY,
-      hostname: "muse-monitor",
+      hostname: NODE_HOSTNAME,
       ephemeral: false,
       logUpload: false,
       stateStorage: {
