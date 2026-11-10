@@ -74,8 +74,10 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 | `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
 
-受信 API のアドレス（muse-vm、tailnet :8090）は固定の相手のため、
-`src/do.ts` 内の定数として持ちます。
+受信 API の相手は、基名 `muse-vm` だけを `src/do.ts` に持ちます。
+IP はノードの再登録で変わり、名前には数字の接尾辞が付くことがあるため、
+実アドレスは WASM ノードの netmap から候補を挙げ、受信側の `/health`
+への到達で判定して決めます（失敗時は再探索）。
 
 ## デプロイ
 

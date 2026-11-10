@@ -12,6 +12,9 @@ GET /monitor/<section>
 - 配置: ホスト（tailnet 内、ポート 8090）。公開インターネットからは
   到達しない。この Worker は Durable Object 内の Tailscale WASM
   ノード経由でのみアクセスする
+- 相手の特定: 基名 `muse-vm` のみを固定とし、実 IP は netmap の
+  ピア（`muse-vm`、`muse-vm-1`、…）から候補を挙げ、`/health` への
+  到達で判定する。IP の固定指定はしない
 - 認証: `Authorization: Bearer <TS_API_KEY>` 必須。
   未設定・不一致は 401、受信側に鍵が未設定なら 503
 
