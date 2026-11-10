@@ -14,7 +14,9 @@ tag = "v1"
 new_sqlite_classes = ["MonitorGateway"]
 
 # Secrets (set by the operator; never committed):
-#   TS_AUTHKEY       - Tailscale auth key for the WASM node (one login only)
+#   TS_AUTHKEY       - (optional) Tailscale auth key for the WASM node.
+#                      If unset, the node uses interactive login: approve
+#                      the loginUrl shown by /api/status once.
 #   TS_API_KEY - Bearer key for the receiver API (same value the
 #                      receiver expects as MUSE_CODE_WASM_API_KEY)
 #   WORKER_API_KEY   - Bearer key callers must present to /api/*

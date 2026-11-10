@@ -32,7 +32,11 @@ import {
 } from "./ts-discover";
 
 interface Env {
-  TS_AUTHKEY: string;
+  // Optional: without it the node falls back to interactive login —
+  // the operator opens the login URL (exposed in /api/status) and
+  // approves the node once. With it, joining is unattended but the
+  // key expires (90 days max) and a lost DO state then needs a new key.
+  TS_AUTHKEY?: string;
   TS_API_KEY: string;
 }
 
@@ -67,6 +71,7 @@ export class MonitorGateway extends DurableObject<Env> {
   private flushPending: Promise<void> | null = null;
   private lastStatus = "not-started";
   private lastError: string | null = null;
+  private browseUrl: string | null = null;
   private peers: PeerCandidate[] = [];
   private resolver = new PeerResolver(RECEIVER_NAME, RECEIVER_PORT);
 
@@ -100,15 +105,12 @@ export class MonitorGateway extends DurableObject<Env> {
   private async ensureNode(): Promise<IPN> {
     if (this.ipn) return this.ipn;
     await this.loadState();
-    if (!this.env.TS_AUTHKEY) {
-      throw new Error("TS_AUTHKEY secret is not set");
-    }
 
     const go = new Go();
     const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
     void go.run(instance);
     const created = newIPN({
-      authKey: this.env.TS_AUTHKEY,
+      ...(this.env.TS_AUTHKEY ? { authKey: this.env.TS_AUTHKEY } : {}),
       hostname: NODE_HOSTNAME,
       ephemeral: false,
       logUpload: false,
@@ -134,7 +136,9 @@ export class MonitorGateway extends DurableObject<Env> {
       notifyNetMap: (netMap: string) => {
         this.peers = parsePeers(netMap);
       },
-      notifyBrowseToURL: () => undefined,
+      notifyBrowseToURL: (url: string) => {
+        this.browseUrl = url;
+      },
       notifyPanicRecover: (error: string) => {
         this.lastError = error;
         this.readyReject?.(new Error(error));
@@ -144,7 +148,17 @@ export class MonitorGateway extends DurableObject<Env> {
     ipn.login(this.env.TS_AUTHKEY);
 
     const timeout = new Promise<void>((_, reject) =>
-      setTimeout(() => reject(new Error("tailscale node did not reach Running in 60s")), 60_000),
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              this.browseUrl
+                ? `tailscale node is waiting for interactive login approval: ${this.browseUrl}`
+                : "tailscale node did not reach Running in 60s",
+            ),
+          ),
+        60_000,
+      ),
     );
     await Promise.race([this.ready, timeout]);
     return ipn;
@@ -260,6 +274,8 @@ export class MonitorGateway extends DurableObject<Env> {
         node: "not-started",
         lastStatus: this.lastStatus,
         lastError: this.lastError,
+        loginUrl: this.browseUrl,
+        authKeyConfigured: Boolean(this.env.TS_AUTHKEY),
       });
     }
     const raw = this.ipn.status();
@@ -274,6 +290,8 @@ export class MonitorGateway extends DurableObject<Env> {
     return Response.json({
       node: this.lastStatus,
       lastError: this.lastError,
+      loginUrl: this.browseUrl,
+      authKeyConfigured: Boolean(this.env.TS_AUTHKEY),
       receiver: {
         baseName: RECEIVER_NAME,
         resolvedIp: this.resolver.cachedIp,
