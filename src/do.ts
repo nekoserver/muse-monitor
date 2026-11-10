@@ -82,6 +82,15 @@ export class MonitorGateway extends DurableObject<Env> {
     super(ctx, env);
   }
 
+  /**
+   * The Tailscale auth key: TS_AUTHKEY, or TS_API_KEY when TS_AUTHKEY is
+   * not set (the operator keeps one key for both). Only when neither is set
+   * does the node fall back to interactive login.
+   */
+  private authKey(): string | undefined {
+    return this.env.TS_AUTHKEY || this.env.TS_API_KEY || undefined;
+  }
+
   private async loadState(): Promise<void> {
     if (this.stateLoaded) return;
     const stored = await this.ctx.storage.get<Record<string, string>>(STATE_KEY);
@@ -161,7 +170,7 @@ export class MonitorGateway extends DurableObject<Env> {
     const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
     void go.run(instance);
     const created = newIPN({
-      ...(this.env.TS_AUTHKEY ? { authKey: this.env.TS_AUTHKEY } : {}),
+      ...(this.authKey() ? { authKey: this.authKey() } : {}),
       hostname: NODE_HOSTNAME,
       ephemeral: false,
       logUpload: false,
@@ -199,7 +208,7 @@ export class MonitorGateway extends DurableObject<Env> {
     };
     ipn.run(callbacks);
     this.ipn = ipn;
-    ipn.login(this.env.TS_AUTHKEY);
+    ipn.login(this.authKey());
     return ipn;
   }
 
@@ -314,7 +323,7 @@ export class MonitorGateway extends DurableObject<Env> {
         lastStatus: this.lastStatus,
         lastError: this.lastError,
         loginUrl: this.browseUrl,
-        authKeyConfigured: Boolean(this.env.TS_AUTHKEY),
+        authKeyConfigured: Boolean(this.authKey()),
       });
     }
     const raw = this.ipn.status();
@@ -330,7 +339,7 @@ export class MonitorGateway extends DurableObject<Env> {
       node: this.lastStatus,
       lastError: this.lastError,
       loginUrl: this.browseUrl,
-      authKeyConfigured: Boolean(this.env.TS_AUTHKEY),
+      authKeyConfigured: Boolean(this.authKey()),
       receiver: {
         baseName: RECEIVER_NAME,
         resolvedIp: this.resolver.cachedIp,

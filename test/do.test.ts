@@ -186,7 +186,7 @@ describe("node start failures", () => {
       node.callbacks!.notifyState("NeedsLogin");
       node.callbacks!.notifyBrowseToURL("https://login.tailscale.com/a/abc123");
     });
-    const gw = gateway({ TS_API_KEY: "k" });
+    const gw = gateway({ TS_API_KEY: "" });
     const pending = get(gw, "/monitor/jobs");
     await vi.advanceTimersByTimeAsync(60_000);
     const res = await pending;
@@ -195,6 +195,27 @@ describe("node start failures", () => {
     expect(nodes[0].config).not.toHaveProperty("authKey");
     const status = await (await get(gw, "/status")).json();
     expect(status).toMatchObject({ loginUrl: "https://login.tailscale.com/a/abc123", authKeyConfigured: false });
+  });
+
+  it("uses TS_API_KEY as the auth key when TS_AUTHKEY is not set, instead of asking for interactive login", async () => {
+    const gw = gateway({ TS_API_KEY: "tskey-auth-shared" });
+    const res = await get(gw, "/monitor/jobs");
+    expect(res.status).toBe(200);
+    expect(nodes[0].config).toMatchObject({ authKey: "tskey-auth-shared" });
+    expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-shared");
+    expect(nodes[0].requests[1].headers).toEqual([["Authorization", "Bearer tskey-auth-shared"]]);
+    expect(await (await get(gw, "/status")).json()).toMatchObject({ authKeyConfigured: true, loginUrl: null });
+  });
+
+  it("prefers TS_AUTHKEY when both are set", async () => {
+    await get(gateway(), "/monitor/jobs");
+    expect(nodes[0].config).toMatchObject({ authKey: "tskey-auth-secret" });
+    expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-secret");
+  });
+
+  it("reports authKeyConfigured from TS_API_KEY before the node starts", async () => {
+    expect(await (await get(gateway({ TS_API_KEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: true });
+    expect(await (await get(gateway({ TS_API_KEY: "" }), "/status")).json()).toMatchObject({ authKeyConfigured: false });
   });
 
   it("keeps answering tailnet_unavailable while the node is not Running, and works once it is", async () => {
