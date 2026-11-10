@@ -37,7 +37,7 @@ interface Env {
   // approves the node once. With it, joining is unattended but the
   // key expires (90 days max) and a lost DO state then needs a new key.
   TS_AUTHKEY?: string;
-  TS_API_KEY: string;
+  RECEIVER_AUTH_KEY: string;
 }
 
 // The receiver is the shared muse-code-wasm receiver on the host node.
@@ -263,7 +263,7 @@ export class MonitorGateway extends DurableObject<Env> {
     return ipn.fetch({
       url: `http://${ip}:${RECEIVER_PORT}/monitor/${section}`,
       method: "GET",
-      headers: [["Authorization", `Bearer ${this.env.TS_API_KEY}`]],
+      headers: [["Authorization", `Bearer ${this.env.RECEIVER_AUTH_KEY}`]],
     });
   }
 

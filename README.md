@@ -53,8 +53,8 @@ Durable Object (MonitorGateway)
 |-------------------------|---------------|--------------------------|
 | `GET /`                 | 不要          | ダッシュボード画面       |
 | `GET /health`           | 不要          | Worker 自身の死活        |
-| `GET /api/status`       | WORKER_API_KEY | WASM ノードの状態       |
-| `GET /api/monitor/<s>`  | WORKER_API_KEY | section のデータを返す  |
+| `GET /api/status`       | DASHBOARD_AUTH_KEY | WASM ノードの状態       |
+| `GET /api/monitor/<s>`  | DASHBOARD_AUTH_KEY | section のデータを返す  |
 | `GET /api/hmac/monitor/<s>` | HMAC 署名  | 本体 Worker 専用。署名が無い・不正・時刻が ±300 秒を超えるものは全て拒否する |
 | `GET /api/hmac/status`  | HMAC 署名      | 本体 Worker 専用。ノード状態（署名対象は `status`） |
 
@@ -74,8 +74,8 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 | 名前              | 用途                                   |
 |-------------------|----------------------------------------|
 | `TS_AUTHKEY`      | （任意）WASM ノードの Tailscale ログイン。未設定の場合は対話ログイン（`/api/status` の `loginUrl` を開いて承認）になる |
-| `TS_API_KEY`| 受信 API への Bearer 認証              |
-| `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
+| `RECEIVER_AUTH_KEY`| 受信 API への Bearer 認証              |
+| `DASHBOARD_AUTH_KEY`  | `/api/*` への Bearer 認証              |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
 
 受信 API の相手は、基名 `muse-vm` だけを `src/do.ts` に持ちます。
@@ -89,10 +89,10 @@ IP はノードの再登録で変わり、名前には数字の接尾辞が付�
 | 名前 | 置き場所 | 何の鍵か | 値 |
 |------|----------|----------|----|
 | `TS_AUTHKEY` | muse-monitor のシークレット（任意） | WASM ノードが tailnet に参加するための認証キー | Tailscale 管理画面で発行。未設定なら対話ログイン（`/api/status` の `loginUrl` を承認） |
-| `TS_API_KEY` | muse-monitor のシークレット | Worker が受信側を呼ぶ際の Bearer | 任意の文字列。受信側の起動時に決める値と揃える |
-| `WORKER_API_KEY` | muse-monitor のシークレット | ダッシュボードの `/api/*` を呼ぶ際の Bearer | 任意の文字列 |
+| `RECEIVER_AUTH_KEY` | muse-monitor のシークレット | Worker が受信側を呼ぶ際の Bearer | 任意の文字列。受信側の起動時に決める値と揃える |
+| `DASHBOARD_AUTH_KEY` | muse-monitor のシークレット | ダッシュボードの `/api/*` を呼ぶ際の Bearer | 任意の文字列 |
 | `MONITOR_HMAC_SECRET` | muse-monitor と本体 Worker の両方 | 本体 Worker からの HMAC 署名の共有鍵 | 両方に同じ任意の文字列 |
-| `MUSE_CODE_WASM_API_KEY` | 受信側の起動時の環境変数 | 受信側（:8090）が受ける Bearer の正 | 任意の文字列（`TS_API_KEY` と揃える）。名前は受信側を作った muse-code-wasm 由来 |
+| `MUSE_CODE_WASM_API_KEY` | 受信側の起動時の環境変数 | 受信側（:8090）が受ける Bearer の正 | 任意の文字列（`RECEIVER_AUTH_KEY` と揃える）。名前は受信側を作った muse-code-wasm 由来 |
 
 現時点では受信側は未起動で、キーはどれも未決定です。この表は設定時の対応表です。
 
@@ -101,8 +101,8 @@ IP はノードの再登録で変わり、名前には数字の接尾辞が付�
 ```sh
 npm install
 npx wrangler secret put TS_AUTHKEY   # 任意（対話ログインを使う場合は不要）
-npx wrangler secret put TS_API_KEY
-npx wrangler secret put WORKER_API_KEY
+npx wrangler secret put RECEIVER_AUTH_KEY
+npx wrangler secret put DASHBOARD_AUTH_KEY
 npx wrangler secret put MONITOR_HMAC_SECRET
 npx wrangler deploy
 ```

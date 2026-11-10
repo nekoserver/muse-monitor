@@ -11,16 +11,16 @@
  * (see lib/muse/SPEC.md). This Worker only looks.
  *
  * Auth (keys are separate and never mixed):
- *   - callers present WORKER_API_KEY (Bearer) to /api/*
- *   - the DO presents TS_API_KEY to the receiver
+ *   - callers present DASHBOARD_AUTH_KEY (Bearer) to /api/*
+ *   - the DO presents RECEIVER_AUTH_KEY to the receiver
  *   - the WASM node joins with TS_AUTHKEY if set, otherwise by
  *     interactive login (approve the loginUrl from /api/status)
  */
 
 interface Env {
   MONITOR_GATEWAY: DurableObjectNamespace;
-  WORKER_API_KEY: string;
-  TS_API_KEY: string;
+  DASHBOARD_AUTH_KEY: string;
+  RECEIVER_AUTH_KEY: string;
   TS_AUTHKEY?: string;
   MONITOR_HMAC_SECRET: string;
 }
@@ -109,7 +109,15 @@ const DASHBOARD = `<!DOCTYPE html>
 <title>muse-monitor</title>
 <style>
   body { font-family: sans-serif; margin: 1em; background: #111; color: #ddd; }
-  section.card { border: 1px solid #2a4d2a; border-radius: 6px; padding: .4em 1em 1em; margin: 1em 0; }
+  section.card { border: 1px solid #444; border-radius: 6px; padding: .4em 1em 1em; margin: 1em 0; }
+  section.card.st-ok { border-color: #2a4d2a; }
+  section.card.st-ok pre { color: #a8d8a8; }
+  section.card.st-ok h2 { color: #a8d8a8; }
+  section.card.st-err { border-color: #6e2a2a; }
+  section.card.st-err pre { color: #f1948a; }
+  section.card.st-err h2 { color: #f1948a; }
+  #nodestat.st-err { color: #f1948a; }
+  #nodestat.st-ok { color: #a8d8a8; }
   h1 { font-size: 1.2em; } h2 { font-size: 1.05em; }
   pre { background: #1b1b1b; border: 1px solid #333; border-radius: 6px;
         padding: .6em 1em; overflow-x: auto; white-space: pre-wrap; }
@@ -151,15 +159,33 @@ const DASHBOARD = `<!DOCTYPE html>
   ];
   const TITLE = Object.fromEntries(SECTIONS);
   const data = {};   // name -> text
+  const state = {};  // name -> "ok" | "err"
   let view = "tabs", activeTab = CATS[0][0], treeSel = "status";
   function key() { return document.getElementById('key').value.trim(); }
+  const KEY_TTL = 7 * 24 * 3600 * 1000;
+  function saveKey() {
+    const k = key();
+    if (k) localStorage.setItem('mm_login', JSON.stringify({ k, exp: Date.now() + KEY_TTL }));
+  }
+  function restoreKey() {
+    try {
+      const s = JSON.parse(localStorage.getItem('mm_login') || 'null');
+      if (s && s.k && s.exp > Date.now()) {
+        document.getElementById('key').value = s.k;
+        return true;
+      }
+      localStorage.removeItem('mm_login');
+    } catch (e) { /* ignore */ }
+    return false;
+  }
   async function load(name) {
-    data[name] = "取得中…"; render();
+    data[name] = "取得中…"; delete state[name]; render();
     try {
       const r = await fetch('/api/monitor/' + name, { headers: { Authorization: 'Bearer ' + key() } });
       const j = await r.json();
+      state[name] = (r.ok && !j.error) ? 'ok' : 'err';
       data[name] = j.output !== undefined ? j.output : JSON.stringify(j, null, 2);
-    } catch (err) { data[name] = '取得失敗: ' + err; }
+    } catch (err) { state[name] = 'err'; data[name] = '取得失敗: ' + err; }
     render();
   }
   async function loadStatus() {
@@ -168,15 +194,16 @@ const DASHBOARD = `<!DOCTYPE html>
       const r = await fetch('/api/status', { headers: { Authorization: 'Bearer ' + key() } });
       const j = await r.json();
       const rcv = j.receiver || {};
+      el.className = j.error ? 'st-err' : 'st-ok';
       el.textContent = 'ノード状態: ' + (j.node ?? JSON.stringify(j)) +
         ' / 受信側: ' + (rcv.baseName ?? '-') + ' -> ' + (rcv.resolvedIp ?? '未解決') +
         ' / 候補: ' + ((rcv.candidates || []).map(c => c.name + '(' + c.ip + ')').join(', ') || 'なし');
-    } catch (err) { el.textContent = 'ノード状態: 取得失敗 ' + err; }
+    } catch (err) { el.className = 'st-err'; el.textContent = 'ノード状態: 取得失敗 ' + err; }
   }
-  function loadAll() { loadStatus(); for (const [name] of SECTIONS) load(name); }
+  function loadAll() { saveKey(); loadStatus(); for (const [name] of SECTIONS) load(name); }
   function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
   function card(name) {
-    return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
+    return '<section class="card' + (state[name] ? ' st-' + state[name] : '') + '" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
       ' <button type="button" onclick="load(\\'' + name + '\\')">再取得</button></h2><pre>' +
       esc(data[name] ?? '（未取得）') + '</pre></section>';
   }
@@ -211,6 +238,7 @@ const DASHBOARD = `<!DOCTYPE html>
   }
   function setView(v) { view = v; render(); }
   render();
+  if (restoreKey()) loadAll();
 </script>
 </body></html>`;
 
@@ -229,7 +257,7 @@ export default {
     }
 
     if (url.pathname === "/api/status" && request.method === "GET") {
-      if (!bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY)) {
+      if (!bearerMatches(request.headers.get("Authorization"), env.DASHBOARD_AUTH_KEY)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
@@ -257,7 +285,7 @@ export default {
     }
 
     if (url.pathname.startsWith("/api/monitor/") && request.method === "GET") {
-      if (!bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY)) {
+      if (!bearerMatches(request.headers.get("Authorization"), env.DASHBOARD_AUTH_KEY)) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const section = url.pathname.slice("/api/monitor/".length);
