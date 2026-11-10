@@ -73,7 +73,7 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 
 | 名前              | 用途                                   |
 |-------------------|----------------------------------------|
-| `TS_AUTHKEY`      | WASM ノードの Tailscale ログイン       |
+| `TS_AUTHKEY`      | （任意）WASM ノードの Tailscale ログイン。未設定の場合は対話ログイン（`/api/status` の `loginUrl` を開いて承認）になる |
 | `TS_API_KEY`| 受信 API への Bearer 認証              |
 | `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
@@ -87,7 +87,7 @@ IP はノードの再登録で変わり、名前には数字の接尾辞が付�
 
 ```sh
 npm install
-npx wrangler secret put TS_AUTHKEY
+npx wrangler secret put TS_AUTHKEY   # 任意（対話ログインを使う場合は不要）
 npx wrangler secret put TS_API_KEY
 npx wrangler secret put WORKER_API_KEY
 npx wrangler secret put MONITOR_HMAC_SECRET

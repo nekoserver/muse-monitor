@@ -13,14 +13,15 @@
  * Auth (keys are separate and never mixed):
  *   - callers present WORKER_API_KEY (Bearer) to /api/*
  *   - the DO presents TS_API_KEY to the receiver
- *   - the WASM node logs in with TS_AUTHKEY
+ *   - the WASM node joins with TS_AUTHKEY if set, otherwise by
+ *     interactive login (approve the loginUrl from /api/status)
  */
 
 interface Env {
   MONITOR_GATEWAY: DurableObjectNamespace;
   WORKER_API_KEY: string;
   TS_API_KEY: string;
-  TS_AUTHKEY: string;
+  TS_AUTHKEY?: string;
   MONITOR_HMAC_SECRET: string;
 }
 
@@ -108,41 +109,58 @@ const DASHBOARD = `<!DOCTYPE html>
 <title>muse-monitor</title>
 <style>
   body { font-family: sans-serif; margin: 1em; background: #111; color: #ddd; }
-  section { border: 1px solid #2a4d2a; border-radius: 6px; padding: .4em 1em 1em; margin: 1em 0; }
+  section.card { border: 1px solid #2a4d2a; border-radius: 6px; padding: .4em 1em 1em; margin: 1em 0; }
   h1 { font-size: 1.2em; } h2 { font-size: 1.05em; }
   pre { background: #1b1b1b; border: 1px solid #333; border-radius: 6px;
         padding: .6em 1em; overflow-x: auto; white-space: pre-wrap; }
   .meta { color: #999; font-size: .85em; }
-  button { margin-left: .5em; }
+  button { margin-left: .5em; cursor: pointer; }
+  .viewbtn.active, .tab.active { background: #2a4d2a; color: #fff; }
+  .tabs { margin: 1em 0 0; border-bottom: 1px solid #2a4d2a; padding-bottom: .4em; }
+  .layout { display: flex; gap: 1em; align-items: flex-start; }
+  .side { position: sticky; top: 1em; min-width: 11em; border: 1px solid #333;
+          border-radius: 6px; padding: .6em .8em; max-height: calc(100vh - 3em); overflow-y: auto; }
+  .side h3 { margin: .6em 0 .2em; font-size: .9em; color: #9c9; }
+  .side a { display: block; color: #ddd; text-decoration: none; padding: .15em 0; }
+  .side a:hover { text-decoration: underline; }
+  .tree { min-width: 12em; border: 1px solid #333; border-radius: 6px; padding: .6em .8em; }
+  .tree button { display: block; margin: .2em 0 .2em 1em; background: none; border: none; color: #ddd; }
+  .tree button.sel { color: #9c9; font-weight: bold; }
+  .tree summary { cursor: pointer; color: #9c9; }
+  .main { flex: 1; min-width: 0; }
 </style></head><body>
 <h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
 <p class="meta">実行系はここにはありません。依頼の受付はホスト側ダッシュボード、
 承認はホストのシェルでのみ行えます。</p>
 <p><label>API キー: <input type="password" id="key" size="32"></label>
-<button type="button" onclick="loadAll()">全て取得</button></p>
+<button type="button" onclick="loadAll()">全て取得</button>
+<span style="margin-left:1em">表示:
+<button type="button" class="viewbtn" data-v="tabs" onclick="setView('tabs')">タブ</button>
+<button type="button" class="viewbtn" data-v="tree" onclick="setView('tree')">ツリー</button>
+<button type="button" class="viewbtn" data-v="panel" onclick="setView('panel')">サイドパネル</button>
+</span></p>
 <pre id="nodestat">ノード状態: （未取得）</pre>
-<div id="sections"></div>
+<div id="view"></div>
 <script>
   const SECTIONS = ${JSON.stringify(SECTIONS)};
-  const root = document.getElementById('sections');
-  for (const [name, title] of SECTIONS) {
-    const s = document.createElement('section');
-    s.innerHTML = '<h2>' + title + ' <button type="button" data-s="' + name + '">再取得</button></h2><pre id="b-' + name + '">（未取得）</pre>';
-    root.appendChild(s);
-  }
-  root.addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-s]');
-    if (b) load(b.dataset.s);
-  });
+  const CATS = [
+    ["概要", ["status", "diag"]],
+    ["SDK", ["sdkhealth", "sdkts", "sdkprofiles", "sdksessions"]],
+    ["ジョブ", ["jobs", "pending", "execlog", "recent"]],
+    ["システム", ["vm", "procs", "ports", "pkgs", "git"]],
+  ];
+  const TITLE = Object.fromEntries(SECTIONS);
+  const data = {};   // name -> text
+  let view = "tabs", activeTab = CATS[0][0], treeSel = "status";
   function key() { return document.getElementById('key').value.trim(); }
   async function load(name) {
-    const el = document.getElementById('b-' + name);
-    el.textContent = '取得中…';
+    data[name] = "取得中…"; render();
     try {
       const r = await fetch('/api/monitor/' + name, { headers: { Authorization: 'Bearer ' + key() } });
       const j = await r.json();
-      el.textContent = j.output !== undefined ? j.output : JSON.stringify(j, null, 2);
-    } catch (err) { el.textContent = '取得失敗: ' + err; }
+      data[name] = j.output !== undefined ? j.output : JSON.stringify(j, null, 2);
+    } catch (err) { data[name] = '取得失敗: ' + err; }
+    render();
   }
   async function loadStatus() {
     const el = document.getElementById('nodestat');
@@ -156,6 +174,43 @@ const DASHBOARD = `<!DOCTYPE html>
     } catch (err) { el.textContent = 'ノード状態: 取得失敗 ' + err; }
   }
   function loadAll() { loadStatus(); for (const [name] of SECTIONS) load(name); }
+  function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+  function card(name) {
+    return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
+      ' <button type="button" onclick="load(\\'' + name + '\\')">再取得</button></h2><pre>' +
+      esc(data[name] ?? '（未取得）') + '</pre></section>';
+  }
+  function render() {
+    for (const b of document.querySelectorAll('.viewbtn'))
+      b.classList.toggle('active', b.dataset.v === view);
+    const root = document.getElementById('view');
+    if (view === 'tabs') {
+      let h = '<div class="tabs">' + CATS.map(([c]) =>
+        '<button type="button" class="tab' + (c === activeTab ? ' active' : '') +
+        '" onclick="activeTab=\\'' + c + '\\';render()">' + esc(c) + '</button>').join('') + '</div>';
+      const [, names] = CATS.find(([c]) => c === activeTab);
+      root.innerHTML = h + names.map(card).join('');
+    } else if (view === 'tree') {
+      let tree = '';
+      for (const [c, names] of CATS) {
+        tree += '<details open><summary>' + esc(c) + '</summary>' + names.map(n =>
+          '<button type="button" class="' + (n === treeSel ? 'sel' : '') +
+          '" onclick="treeSel=\\'' + n + '\\';render()">' + esc(TITLE[n]) + '</button>').join('') + '</details>';
+      }
+      root.innerHTML = '<div class="layout"><div class="tree">' + tree +
+        '</div><div class="main">' + card(treeSel) + '</div></div>';
+    } else {
+      let side = '';
+      for (const [c, names] of CATS) {
+        side += '<h3>' + esc(c) + '</h3>' + names.map(n =>
+          '<a href="#sec-' + n + '">' + esc(TITLE[n]) + '</a>').join('');
+      }
+      root.innerHTML = '<div class="layout"><div class="side">' + side +
+        '</div><div class="main">' + SECTIONS.map(([n]) => card(n)).join('') + '</div></div>';
+    }
+  }
+  function setView(v) { view = v; render(); }
+  render();
 </script>
 </body></html>`;
 
