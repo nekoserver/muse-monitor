@@ -24,6 +24,12 @@ import type {
   IPNCallbacks,
   IPNConfig,
 } from "./wasm-ipn";
+import {
+  parsePeers,
+  candidatesFor,
+  PeerResolver,
+  type PeerCandidate,
+} from "./ts-discover";
 
 interface Env {
   TS_AUTHKEY: string;
@@ -38,12 +44,6 @@ interface Env {
 // receiver's /health (see resolveReceiver below).
 const RECEIVER_NAME = "muse-vm";
 const RECEIVER_PORT = 8090;
-const PROBE_TIMEOUT_MS = 5000;
-
-interface PeerCandidate {
-  name: string;
-  ip: string;
-}
 
 const STATE_KEY = "ts-state";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -63,7 +63,7 @@ export class MonitorGateway extends DurableObject<Env> {
   private lastStatus = "not-started";
   private lastError: string | null = null;
   private peers: PeerCandidate[] = [];
-  private resolvedIp: string | null = null;
+  private resolver = new PeerResolver(RECEIVER_NAME, RECEIVER_PORT);
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -159,47 +159,9 @@ export class MonitorGateway extends DurableObject<Env> {
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
-  /**
-   * Resolve the receiver's current tailnet IP: candidates are netmap
-   * peers named RECEIVER_NAME or RECEIVER_NAME-<n>; each is probed via
-   * the receiver's unauthenticated /health. The first that answers is
-   * cached; the cache is dropped whenever a request fails in transport.
-   */
+  /** Resolve (or re-resolve) the receiver's current tailnet IP. */
   private async resolveReceiver(ipn: IPN, force: boolean): Promise<string | null> {
-    if (this.resolvedIp && !force) return this.resolvedIp;
-    const base = new RegExp(`^${RECEIVER_NAME}(-\\d+)?$`);
-    const candidates = this.peers.filter((p) => base.test(p.name));
-    // Exact name first, then suffixed names in ascending order.
-    candidates.sort((a, b) => a.name.localeCompare(b.name));
-    for (const c of candidates) {
-      if (await this.probe(ipn, c.ip)) {
-        this.resolvedIp = c.ip;
-        return c.ip;
-      }
-    }
-    this.resolvedIp = null;
-    return null;
-  }
-
-  /** Probe one candidate's receiver /health (no auth needed). */
-  private async probe(ipn: IPN, ip: string): Promise<boolean> {
-    try {
-      const attempt = (async () => {
-        const resp = await ipn.fetch({
-          url: `http://${ip}:${RECEIVER_PORT}/health`,
-          method: "GET",
-          headers: [],
-        });
-        resp.cancel();
-        return resp.status === 200;
-      })();
-      const timeout = new Promise<boolean>((resolve) =>
-        setTimeout(() => resolve(false), PROBE_TIMEOUT_MS),
-      );
-      return await Promise.race([attempt, timeout]);
-    } catch {
-      return false;
-    }
+    return this.resolver.resolve((req) => ipn.fetch(req), this.peers, force);
   }
 
   /** GET one monitor section from the receiver through the tailnet. */
@@ -225,6 +187,7 @@ export class MonitorGateway extends DurableObject<Env> {
       resp = await this.fetchSection(ipn, ip, section);
     } catch {
       // Transport failed against the cached peer: re-resolve once.
+      this.resolver.invalidate();
       ip = await this.resolveReceiver(ipn, true);
       if (!ip) {
         return Response.json(
@@ -308,52 +271,11 @@ export class MonitorGateway extends DurableObject<Env> {
       lastError: this.lastError,
       receiver: {
         baseName: RECEIVER_NAME,
-        resolvedIp: this.resolvedIp,
-        candidates: this.peers.filter((p) =>
-          new RegExp(`^${RECEIVER_NAME}(-\\d+)?$`).test(p.name),
-        ),
+        resolvedIp: this.resolver.cachedIp,
+        candidates: candidatesFor(this.peers, RECEIVER_NAME),
       },
       tailscale: parsed,
     });
   }
 }
 
-/**
- * Extract peer candidates (first DNS label + first IPv4) from the
- * netmap JSON delivered by notifyNetMap. The exact field layout of the
- * WASM build's serialization is not typed, so the plausible spellings
- * are all tried and unknown shapes simply yield no candidates.
- */
-function parsePeers(netMapJson: string): PeerCandidate[] {
-  let root: unknown;
-  try {
-    root = JSON.parse(netMapJson);
-  } catch {
-    return [];
-  }
-  const out: PeerCandidate[] = [];
-  const seen = new Set<string>();
-  const visit = (value: unknown, depth: number): void => {
-    if (depth > 6 || value === null || typeof value !== "object") return;
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item, depth + 1);
-      return;
-    }
-    const rec = value as Record<string, unknown>;
-    const name = rec["Name"] ?? rec["name"];
-    const ips = rec["TailscaleIPs"] ?? rec["tailscaleIPs"] ?? rec["Addresses"];
-    if (typeof name === "string" && Array.isArray(ips)) {
-      const label = name.split(".")[0].replace(/\.$/, "");
-      const ip = ips.find(
-        (a): a is string => typeof a === "string" && a.includes("."),
-      );
-      if (label && ip && !seen.has(label)) {
-        seen.add(label);
-        out.push({ name: label, ip });
-      }
-    }
-    for (const v of Object.values(rec)) visit(v, depth + 1);
-  };
-  visit(root, 0);
-  return out;
-}
