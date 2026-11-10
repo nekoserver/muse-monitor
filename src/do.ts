@@ -37,7 +37,7 @@ interface Env {
   // approves the node once. With it, joining is unattended but the
   // key expires (90 days max) and a lost DO state then needs a new key.
   TS_AUTHKEY?: string;
-  TS_API_KEY: string;
+  TS_API_KEY?: string;
 }
 
 // The receiver is the shared muse-code-wasm receiver on the host node.
@@ -63,9 +63,12 @@ const SECTIONS = new Set([
 
 export class MonitorGateway extends DurableObject<Env> {
   private ipn: IPN | null = null;
-  private ready: Promise<void> | null = null;
-  private readyResolve: (() => void) | null = null;
-  private readyReject: ((err: Error) => void) | null = null;
+  /** Single flight for creating the node: concurrent requests share one start. */
+  private starting: Promise<IPN> | null = null;
+  /** Requests waiting for the node to reach Running (resolved/rejected by the callbacks). */
+  private waiters = new Set<{ resolve(): void; reject(err: Error): void }>();
+  /** A panic reported while nobody was waiting; the next wait reports it. */
+  private pendingPanic: string | null = null;
   private state = new Map<string, string>();
   private stateLoaded = false;
   private flushPending: Promise<void> | null = null;
@@ -77,10 +80,32 @@ export class MonitorGateway extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.ready = new Promise<void>((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
-    });
+  }
+
+  /**
+   * The Tailscale auth key: TS_AUTHKEY, or TS_API_KEY when TS_AUTHKEY is
+   * not set (the operator keeps one key for both). Only when neither is set
+   * does the node fall back to interactive login.
+   */
+  private authKey(): string | undefined {
+    return this.env.TS_AUTHKEY || this.env.TS_API_KEY || undefined;
+  }
+
+  /** Which secret the node's auth key comes from (never the value). */
+  private authKeySource(): "TS_AUTHKEY" | "TS_API_KEY" | null {
+    if (this.env.TS_AUTHKEY) return "TS_AUTHKEY";
+    if (this.env.TS_API_KEY) return "TS_API_KEY";
+    return null;
+  }
+
+  /**
+   * The Bearer presented to the receiver: TS_API_KEY, or TS_AUTHKEY when
+   * TS_API_KEY is not set (the operator keeps one key for both).
+   */
+  private receiverKey(): { value: string; source: "TS_API_KEY" | "TS_AUTHKEY" } | null {
+    if (this.env.TS_API_KEY) return { value: this.env.TS_API_KEY, source: "TS_API_KEY" };
+    if (this.env.TS_AUTHKEY) return { value: this.env.TS_AUTHKEY, source: "TS_AUTHKEY" };
+    return null;
   }
 
   private async loadState(): Promise<void> {
@@ -102,15 +127,69 @@ export class MonitorGateway extends DurableObject<Env> {
     this.ctx.waitUntil(this.flushPending);
   }
 
+  /**
+   * Return the node once it is Running. The node is created once and then
+   * kept (its identity lives in the persisted state); every call waits for
+   * Running on its own, up to 60 s, so a node that is still waiting for
+   * login approval, or that reported a panic, is never used as if it were
+   * up, and a later approval makes the same node usable again.
+   */
   private async ensureNode(): Promise<IPN> {
-    if (this.ipn) return this.ipn;
+    if (!this.ipn) {
+      this.starting ??= this.startNode().finally(() => {
+        this.starting = null;
+      });
+      await this.starting;
+    }
+    const ipn = this.ipn!;
+    if (this.lastStatus !== "Running") await this.waitForRunning();
+    return ipn;
+  }
+
+  private waitForRunning(): Promise<void> {
+    if (this.pendingPanic !== null) {
+      const error = this.pendingPanic;
+      this.pendingPanic = null;
+      return Promise.reject(new Error(error));
+    }
+    return new Promise<void>((resolve, reject) => {
+      const waiter = {
+        resolve: () => {
+          clearTimeout(timer);
+          this.waiters.delete(waiter);
+          resolve();
+        },
+        reject: (err: Error) => {
+          clearTimeout(timer);
+          this.waiters.delete(waiter);
+          reject(err);
+        },
+      };
+      const timer = setTimeout(
+        () =>
+          waiter.reject(
+            new Error(
+              this.browseUrl
+                ? this.authKeySource()
+                  ? `the auth key from ${this.authKeySource()} was not accepted (expired, revoked or not an auth key?); the node is waiting for interactive login approval instead: ${this.browseUrl}`
+                  : `tailscale node is waiting for interactive login approval: ${this.browseUrl}`
+                : `tailscale node did not reach Running in 60s (state: ${this.lastStatus}, auth key from: ${this.authKeySource() ?? "none"})`,
+            ),
+          ),
+        60_000,
+      );
+      this.waiters.add(waiter);
+    });
+  }
+
+  private async startNode(): Promise<IPN> {
     await this.loadState();
 
     const go = new Go();
     const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
     void go.run(instance);
     const created = newIPN({
-      ...(this.env.TS_AUTHKEY ? { authKey: this.env.TS_AUTHKEY } : {}),
+      ...(this.authKey() ? { authKey: this.authKey() } : {}),
       hostname: NODE_HOSTNAME,
       ephemeral: false,
       logUpload: false,
@@ -126,12 +205,13 @@ export class MonitorGateway extends DurableObject<Env> {
       throw new Error(`newIPN failed: ${created.message}`);
     }
     const ipn = created;
-    this.ipn = ipn;
 
     const callbacks: IPNCallbacks = {
       notifyState: (state: string) => {
         this.lastStatus = state;
-        if (state === "Running") this.readyResolve?.();
+        if (state !== "Running") return;
+        this.pendingPanic = null;
+        for (const w of [...this.waiters]) w.resolve();
       },
       notifyNetMap: (netMap: string) => {
         this.peers = parsePeers(netMap);
@@ -141,26 +221,13 @@ export class MonitorGateway extends DurableObject<Env> {
       },
       notifyPanicRecover: (error: string) => {
         this.lastError = error;
-        this.readyReject?.(new Error(error));
+        if (this.waiters.size === 0) this.pendingPanic = error;
+        for (const w of [...this.waiters]) w.reject(new Error(error));
       },
     };
     ipn.run(callbacks);
-    ipn.login(this.env.TS_AUTHKEY);
-
-    const timeout = new Promise<void>((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              this.browseUrl
-                ? `tailscale node is waiting for interactive login approval: ${this.browseUrl}`
-                : "tailscale node did not reach Running in 60s",
-            ),
-          ),
-        60_000,
-      ),
-    );
-    await Promise.race([this.ready, timeout]);
+    this.ipn = ipn;
+    ipn.login(this.authKey());
     return ipn;
   }
 
@@ -185,6 +252,16 @@ export class MonitorGateway extends DurableObject<Env> {
 
   /** GET one monitor section from the receiver through the tailnet. */
   async monitor(section: string): Promise<Response> {
+    const key = this.receiverKey();
+    if (!key) {
+      return Response.json(
+        {
+          error: "receiver_key_missing",
+          message: "neither TS_API_KEY nor TS_AUTHKEY is set; set the key the receiver expects (MUSE_CODE_WASM_API_KEY) with wrangler secret put TS_API_KEY",
+        },
+        { status: 500 },
+      );
+    }
     let ipn: IPN;
     try {
       ipn = await this.ensureNode();
@@ -203,7 +280,7 @@ export class MonitorGateway extends DurableObject<Env> {
     }
     let resp;
     try {
-      resp = await this.fetchSection(ipn, ip, section);
+      resp = await this.fetchSection(ipn, ip, section, key.value);
     } catch {
       // Transport failed against the cached peer: re-resolve once.
       this.resolver.invalidate();
@@ -215,7 +292,7 @@ export class MonitorGateway extends DurableObject<Env> {
         );
       }
       try {
-        resp = await this.fetchSection(ipn, ip, section);
+        resp = await this.fetchSection(ipn, ip, section, key.value);
       } catch (err) {
         return Response.json(
           { error: "delivery_unknown", message: `tailnet GET failed: ${String(err)}` },
@@ -252,6 +329,30 @@ export class MonitorGateway extends DurableObject<Env> {
       offset += c.length;
     }
     const text = new TextDecoder().decode(merged);
+    if (resp.status === 401 || resp.status === 503) {
+      let receiver: unknown = text;
+      try {
+        receiver = JSON.parse(text);
+      } catch {
+        // keep the raw text
+      }
+      return Response.json(
+        resp.status === 401
+          ? {
+              error: "receiver_unauthorized",
+              message: `the receiver on ${RECEIVER_NAME} rejected the Bearer from ${key.source}; it must equal the receiver's MUSE_CODE_WASM_API_KEY`,
+              keySource: key.source,
+              receiver,
+            }
+          : {
+              error: "receiver_key_not_configured",
+              message: `the receiver on ${RECEIVER_NAME} has no key configured; start it with MUSE_CODE_WASM_API_KEY set to the same value as ${key.source}`,
+              keySource: key.source,
+              receiver,
+            },
+        { status: resp.status },
+      );
+    }
     return new Response(text, {
       status: resp.status,
       headers: { "Content-Type": "application/json" },
@@ -259,11 +360,11 @@ export class MonitorGateway extends DurableObject<Env> {
   }
 
   /** One GET against the receiver on a resolved peer IP. */
-  private async fetchSection(ipn: IPN, ip: string, section: string) {
+  private async fetchSection(ipn: IPN, ip: string, section: string, bearer: string) {
     return ipn.fetch({
       url: `http://${ip}:${RECEIVER_PORT}/monitor/${section}`,
       method: "GET",
-      headers: [["Authorization", `Bearer ${this.env.TS_API_KEY}`]],
+      headers: [["Authorization", `Bearer ${bearer}`]],
     });
   }
 
@@ -275,7 +376,8 @@ export class MonitorGateway extends DurableObject<Env> {
         lastStatus: this.lastStatus,
         lastError: this.lastError,
         loginUrl: this.browseUrl,
-        authKeyConfigured: Boolean(this.env.TS_AUTHKEY),
+        authKeyConfigured: Boolean(this.authKey()),
+        authKeySource: this.authKeySource(),
       });
     }
     const raw = this.ipn.status();
@@ -291,7 +393,8 @@ export class MonitorGateway extends DurableObject<Env> {
       node: this.lastStatus,
       lastError: this.lastError,
       loginUrl: this.browseUrl,
-      authKeyConfigured: Boolean(this.env.TS_AUTHKEY),
+      authKeyConfigured: Boolean(this.authKey()),
+        authKeySource: this.authKeySource(),
       receiver: {
         baseName: RECEIVER_NAME,
         resolvedIp: this.resolver.cachedIp,
