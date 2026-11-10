@@ -1,1 +1,21 @@
-Ly8gVHlwZSBkZWNsYXJhdGlvbnMgZm9yIHRoZSB3YXNtLXRhaWxzY2FsZSBwYWNrYWdlJ3Mgbm9uLVRTIGFzc2V0cyBhbmQgdGhlCi8vIEdvIHJ1bnRpbWUgZ2xvYmFscy4gVGhpcyBmaWxlIGlzIGludGVudGlvbmFsbHkgYSBzY3JpcHQgKG5vIHRvcC1sZXZlbAovLyBpbXBvcnQvZXhwb3J0KTogYW1iaWVudCBgZGVjbGFyZSBtb2R1bGVgIHN0YXRlbWVudHMgaW4gYSBtb2R1bGUgLmQudHMKLy8gd2VyZSBub3QgcGlja2VkIHVwIGJ5IHRoaXMgVHlwZVNjcmlwdCB2ZXJzaW9uLCB3aGlsZSB0aGUgc2NyaXB0IGZvcm0KLy8gcmVzb2x2ZXMgdGhlbS4KZGVjbGFyZSBtb2R1bGUgIkBhaS1lY292ZXJzZS93YXNtLXRhaWxzY2FsZS93YXNtX2V4ZWMuanMiOwoKZGVjbGFyZSBtb2R1bGUgIkBhaS1lY292ZXJzZS93YXNtLXRhaWxzY2FsZS9tYWluLndhc20iIHsKICBjb25zdCB3YXNtTW9kdWxlOiBXZWJBc3NlbWJseS5Nb2R1bGU7CiAgZXhwb3J0IGRlZmF1bHQgd2FzbU1vZHVsZTsKfQoKZGVjbGFyZSBjbGFzcyBHbyB7CiAgaW1wb3J0T2JqZWN0OiBXZWJBc3NlbWJseS5JbXBvcnRzOwogIHJ1bihpbnN0YW5jZTogV2ViQXNzZW1ibHkuSW5zdGFuY2UpOiBQcm9taXNlPHZvaWQ+Owp9CgovKiogQW4gRXJyb3IgaW5zdGVhZCBvZiBhIG5vZGUgd2hlbiB0aGUgYmFja2VuZCBjYW4ndCBiZSBidWlsdCAoZm9yIGV4YW1wbGUsIHN0YXRlU3RvcmFnZSB0aHJldykuICovCmRlY2xhcmUgZnVuY3Rpb24gbmV3SVBOKAogIGNvbmZpZzogaW1wb3J0KCIuL3dhc20taXBuIikuSVBOQ29uZmlnLAopOiBpbXBvcnQoIi4vd2FzbS1pcG4iKS5JUE4gfCBFcnJvcjsK
+// Type declarations for the wasm-tailscale package's non-TS assets and the
+// Go runtime globals. This file is intentionally a script (no top-level
+// import/export): ambient `declare module` statements in a module .d.ts
+// were not picked up by this TypeScript version, while the script form
+// resolves them.
+declare module "@ai-ecoverse/wasm-tailscale/wasm_exec.js";
+
+declare module "@ai-ecoverse/wasm-tailscale/main.wasm" {
+  const wasmModule: WebAssembly.Module;
+  export default wasmModule;
+}
+
+declare class Go {
+  importObject: WebAssembly.Imports;
+  run(instance: WebAssembly.Instance): Promise<void>;
+}
+
+/** An Error instead of a node when the backend can't be built (for example, stateStorage threw). */
+declare function newIPN(
+  config: import("./wasm-ipn").IPNConfig,
+): import("./wasm-ipn").IPN | Error;

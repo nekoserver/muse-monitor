@@ -1,1 +1,134 @@
-LyoqCiAqIG11c2UtbW9uaXRvciDigJQgbWluaW1hbCBzdGFuZGFsb25lIFdvcmtlciBmb3IgdGhlIE11c2Ugc3lzdGVtIG1vbml0b3IuCiAqCiAqIFNlcnZlcyBhIHJlYWQtb25seSBkYXNoYm9hcmQgb2YgdGhlIG11c2Utdm0gaG9zdCAodGhlIGxpYi9tdXNlIG1vbml0b3IKICogYXNzZXRzKSBhbmQgcHJveGllcyBzZWN0aW9uIGRhdGEgdGhyb3VnaCB0aGUgTW9uaXRvckdhdGV3YXkgRHVyYWJsZQogKiBPYmplY3QncyBUYWlsc2NhbGUgV0FTTSBub2RlIHRvIHRoZSBzaGFyZWQgcmVjZWl2ZXIgb24gbXVzZS12bSAoOjgwOTAsCiAqIEdFVCAvbW9uaXRvci88c2VjdGlvbj4pLgogKgogKiBEZWxpYmVyYXRlbHkgTk9UIGhlcmU6IGFueSBleGVjdXRpb24gcGF0aC4gU3VibWl0dGluZyBhIHJlcXVlc3QgaXMgdGhlCiAqIGRhc2hib2FyZC9hc2suY2dpIGZsb3cgb24gdGhlIGhvc3QsIGFwcHJvdmFsIGlzIGhvc3Qtc2lkZSBvbmx5CiAqIChzZWUgbGliL211c2UvU1BFQy5tZCkuIFRoaXMgV29ya2VyIG9ubHkgbG9va3MuCiAqCiAqIEF1dGggKGtleXMgYXJlIHNlcGFyYXRlIGFuZCBuZXZlciBtaXhlZCk6CiAqICAgLSBjYWxsZXJzIHByZXNlbnQgV09SS0VSX0FQSV9LRVkgKEJlYXJlcikgdG8gL2FwaS8qCiAqICAgLSB0aGUgRE8gcHJlc2VudHMgUkVDRUlWRVJfQVBJX0tFWSB0byB0aGUgcmVjZWl2ZXIKICogICAtIHRoZSBXQVNNIG5vZGUgbG9ncyBpbiB3aXRoIFRTX0FVVEhLRVkKICovCgppbnRlcmZhY2UgRW52IHsKICBNT05JVE9SX0dBVEVXQVk6IER1cmFibGVPYmplY3ROYW1lc3BhY2U7CiAgV09SS0VSX0FQSV9LRVk6IHN0cmluZzsKICBSRUNFSVZFUl9BUElfS0VZOiBzdHJpbmc7CiAgUkVDRUlWRVJfVVJMOiBzdHJpbmc7CiAgVFNfQVVUSEtFWTogc3RyaW5nOwp9CgpleHBvcnQgeyBNb25pdG9yR2F0ZXdheSB9IGZyb20gIi4vZG8iOwoKZnVuY3Rpb24gYmVhcmVyTWF0Y2hlcyhoZWFkZXI6IHN0cmluZyB8IG51bGwsIGV4cGVjdGVkOiBzdHJpbmcpOiBib29sZWFuIHsKICBpZiAoIWhlYWRlciB8fCAhZXhwZWN0ZWQpIHJldHVybiBmYWxzZTsKICBpZiAoIWhlYWRlci5zdGFydHNXaXRoKCJCZWFyZXIgIikpIHJldHVybiBmYWxzZTsKICBjb25zdCBnb3QgPSBoZWFkZXIuc2xpY2UoIkJlYXJlciAiLmxlbmd0aCk7CiAgaWYgKGdvdC5sZW5ndGggIT09IGV4cGVjdGVkLmxlbmd0aCkgcmV0dXJuIGZhbHNlOwogIGxldCBkaWZmID0gMDsKICBmb3IgKGxldCBpID0gMDsgaSA8IGdvdC5sZW5ndGg7IGkrKykgZGlmZiB8PSBnb3QuY2hhckNvZGVBdChpKSBeIGV4cGVjdGVkLmNoYXJDb2RlQXQoaSk7CiAgcmV0dXJuIGRpZmYgPT09IDA7Cn0KCmNvbnN0IFNFQ1RJT05TOiBBcnJheTxbc3RyaW5nLCBzdHJpbmddPiA9IFsKICBbInN0YXR1cyIsICLnirbmhYvvvIh0YWlsc2NhbGVkIC8gQnJpZGdl77yJIl0sCiAgWyJkaWFnIiwgIuiouuaWreOCteODnuODqu+8iOWFqDMz6aCF55uu77yJIl0sCiAgWyJzZGtoZWFsdGgiLCAiU0RLIOODmOODq+OCuSJdLAogIFsiam9icyIsICLjgrjjg6fjg5bjgq3jg6Xjg7wiXSwKICBbInBlbmRpbmciLCAi5om/6KqN5b6F44GhIl0sCiAgWyJleGVjbG9nIiwgIuWun+ihjOebo+afu+ODreOCsCJdLAogIFsicGtncyIsICLjg5Hjg4PjgrHjg7zjgrjniYjmlbAiXSwKICBbInZtIiwgIlZNIOaDheWgsSJdLAogIFsicHJvY3MiLCAi44OX44Ot44K744K55LiK5L2NIl0sCiAgWyJwb3J0cyIsICLlvoXjgaHlj5fjgZHjg53jg7zjg4giXSwKICBbImdpdCIsICJnaXQg54q25oWLIl0sCiAgWyJyZWNlbnQiLCAi55u06L+R44Gu5a6M5LqG44K444On44OWIl0sCl07Cgpjb25zdCBEQVNIQk9BUkQgPSBgPCFET0NUWVBFIGh0bWw+CjxodG1sIGxhbmc9ImphIj48aGVhZD48bWV0YSBjaGFyc2V0PSJ1dGYtOCI+CjxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MSI+Cjx0aXRsZT5tdXNlLW1vbml0b3I8L3RpdGxlPgo8c3R5bGU+CiAgYm9keSB7IGZvbnQtZmFtaWx5OiBzYW5zLXNlcmlmOyBtYXJnaW46IDFlbTsgYmFja2dyb3VuZDogIzExMTsgY29sb3I6ICNkZGQ7IH0KICBzZWN0aW9uIHsgYm9yZGVyOiAxcHggc29saWQgIzJhNGQyYTsgYm9yZGVyLXJhZGl1czogNnB4OyBwYWRkaW5nOiAuNGVtIDFlbSAxZW07IG1hcmdpbjogMWVtIDA7IH0KICBoMSB7IGZvbnQtc2l6ZTogMS4yZW07IH0gaDIgeyBmb250LXNpemU6IDEuMDVlbTsgfQogIHByZSB7IGJhY2tncm91bmQ6ICMxYjFiMWI7IGJvcmRlcjogMXB4IHNvbGlkICMzMzM7IGJvcmRlci1yYWRpdXM6IDZweDsKICAgICAgICBwYWRkaW5nOiAuNmVtIDFlbTsgb3ZlcmZsb3cteDogYXV0bzsgd2hpdGUtc3BhY2U6IHByZS13cmFwOyB9CiAgLm1ldGEgeyBjb2xvcjogIzk5OTsgZm9udC1zaXplOiAuODVlbTsgfQogIGJ1dHRvbiB7IG1hcmdpbi1sZWZ0OiAuNWVtOyB9Cjwvc3R5bGU+PC9oZWFkPjxib2R5Pgo8aDE+bXVzZS1tb25pdG9yIDxzcGFuIGNsYXNzPSJtZXRhIj7oqq3jgb/lj5bjgorlsILnlKjjg6Ljg4vjgr/vvIhtdXNlLXZt77yJPC9zcGFuPjwvaDE+CjxwIGNsYXNzPSJtZXRhIj7lrp/ooYzns7vjga/jgZPjgZPjgavjga/jgYLjgorjgb7jgZvjgpPjgILkvp3poLzjga7lj5fku5jjga/jg5vjgrnjg4jlgbTjg4Djg4Pjgrfjg6Xjg5zjg7zjg4njgIEK5om/6KqN44Gv44Ob44K544OI44Gu44K344Kn44Or44Gn44Gu44G/6KGM44GI44G+44GZ44CCPC9wPgo8cD48bGFiZWw+QVBJIOOCreODvDogPGlucHV0IHR5cGU9InBhc3N3b3JkIiBpZD0ia2V5IiBzaXplPSIzMiI+PC9sYWJlbD4KPGJ1dHRvbiB0eXBlPSJidXR0b24iIG9uY2xpY2s9ImxvYWRBbGwoKSI+5YWo44Gm5Y+W5b6XPC9idXR0b24+PC9wPgo8ZGl2IGlkPSJzZWN0aW9ucyI+PC9kaXY+CjxzY3JpcHQ+CiAgY29uc3QgU0VDVElPTlMgPSAke0pTT04uc3RyaW5naWZ5KFNFQ1RJT05TKX07CiAgY29uc3Qgcm9vdCA9IGRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCdzZWN0aW9ucycpOwogIGZvciAoY29uc3QgW25hbWUsIHRpdGxlXSBvZiBTRUNUSU9OUykgewogICAgY29uc3QgcyA9IGRvY3VtZW50LmNyZWF0ZUVsZW1lbnQoJ3NlY3Rpb24nKTsKICAgIHMuaW5uZXJIVE1MID0gJzxoMj4nICsgdGl0bGUgKyAnIDxidXR0b24gdHlwZT0iYnV0dG9uIiBkYXRhLXM9IicgKyBuYW1lICsgJyI+5YaN5Y+W5b6XPC9idXR0b24+PC9oMj48cHJlIGlkPSJiLScgKyBuYW1lICsgJyI+77yI5pyq5Y+W5b6X77yJPC9wcmU+JzsKICAgIHJvb3QuYXBwZW5kQ2hpbGQocyk7CiAgfQogIHJvb3QuYWRkRXZlbnRMaXN0ZW5lcignY2xpY2snLCAoZSkgPT4gewogICAgY29uc3QgYiA9IGUudGFyZ2V0LmNsb3Nlc3QoJ2J1dHRvbltkYXRhLXNdJyk7CiAgICBpZiAoYikgbG9hZChiLmRhdGFzZXQucyk7CiAgfSk7CiAgZnVuY3Rpb24ga2V5KCkgeyByZXR1cm4gZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ2tleScpLnZhbHVlLnRyaW0oKTsgfQogIGFzeW5jIGZ1bmN0aW9uIGxvYWQobmFtZSkgewogICAgY29uc3QgZWwgPSBkb2N1bWVudC5nZXRFbGVtZW50QnlJZCgnYi0nICsgbmFtZSk7CiAgICBlbC50ZXh0Q29udGVudCA9ICflj5blvpfkuK3igKYnOwogICAgdHJ5IHsKICAgICAgY29uc3QgciA9IGF3YWl0IGZldGNoKCcvYXBpL21vbml0b3IvJyArIG5hbWUsIHsgaGVhZGVyczogeyBBdXRob3JpemF0aW9uOiAnQmVhcmVyICcgKyBrZXkoKSB9IH0pOwogICAgICBjb25zdCBqID0gYXdhaXQgci5qc29uKCk7CiAgICAgIGVsLnRleHRDb250ZW50ID0gai5vdXRwdXQgIT09IHVuZGVmaW5lZCA/IGoub3V0cHV0IDogSlNPTi5zdHJpbmdpZnkoaiwgbnVsbCwgMik7CiAgICB9IGNhdGNoIChlcnIpIHsgZWwudGV4dENvbnRlbnQgPSAn5Y+W5b6X5aSx5pWXOiAnICsgZXJyOyB9CiAgfQogIGZ1bmN0aW9uIGxvYWRBbGwoKSB7IGZvciAoY29uc3QgW25hbWVdIG9mIFNFQ1RJT05TKSBsb2FkKG5hbWUpOyB9Cjwvc2NyaXB0Pgo8L2JvZHk+PC9odG1sPmA7CgpleHBvcnQgZGVmYXVsdCB7CiAgYXN5bmMgZmV0Y2gocmVxdWVzdDogUmVxdWVzdCwgZW52OiBFbnYpOiBQcm9taXNlPFJlc3BvbnNlPiB7CiAgICBjb25zdCB1cmwgPSBuZXcgVVJMKHJlcXVlc3QudXJsKTsKCiAgICBpZiAodXJsLnBhdGhuYW1lID09PSAiL2hlYWx0aCIgJiYgcmVxdWVzdC5tZXRob2QgPT09ICJHRVQiKSB7CiAgICAgIHJldHVybiBSZXNwb25zZS5qc29uKHsgc3RhdHVzOiAib2siLCB3b3JrZXI6ICJtdXNlLW1vbml0b3IiIH0pOwogICAgfQoKICAgIGlmICh1cmwucGF0aG5hbWUgPT09ICIvIiAmJiByZXF1ZXN0Lm1ldGhvZCA9PT0gIkdFVCIpIHsKICAgICAgcmV0dXJuIG5ldyBSZXNwb25zZShEQVNIQk9BUkQsIHsKICAgICAgICBoZWFkZXJzOiB7ICJDb250ZW50LVR5cGUiOiAidGV4dC9odG1sOyBjaGFyc2V0PXV0Zi04IiB9LAogICAgICB9KTsKICAgIH0KCiAgICBpZiAodXJsLnBhdGhuYW1lID09PSAiL2FwaS9zdGF0dXMiICYmIHJlcXVlc3QubWV0aG9kID09PSAiR0VUIikgewogICAgICBpZiAoIWJlYXJlck1hdGNoZXMocmVxdWVzdC5oZWFkZXJzLmdldCgiQXV0aG9yaXphdGlvbiIpLCBlbnYuV09SS0VSX0FQSV9LRVkpKSB7CiAgICAgICAgcmV0dXJuIFJlc3BvbnNlLmpzb24oeyBlcnJvcjogInVuYXV0aG9yaXplZCIgfSwgeyBzdGF0dXM6IDQwMSB9KTsKICAgICAgfQogICAgICBjb25zdCBpZCA9IGVudi5NT05JVE9SX0dBVEVXQVkuaWRGcm9tTmFtZSgibW9uaXRvci1nYXRld2F5Iik7CiAgICAgIGNvbnN0IHN0dWIgPSBlbnYuTU9OSVRPUl9HQVRFV0FZLmdldChpZCk7CiAgICAgIHJldHVybiBzdHViLmZldGNoKCJodHRwOi8vZG8vc3RhdHVzIik7CiAgICB9CgogICAgaWYgKHVybC5wYXRobmFtZS5zdGFydHNXaXRoKCIvYXBpL21vbml0b3IvIikgJiYgcmVxdWVzdC5tZXRob2QgPT09ICJHRVQiKSB7CiAgICAgIGlmICghYmVhcmVyTWF0Y2hlcyhyZXF1ZXN0LmhlYWRlcnMuZ2V0KCJBdXRob3JpemF0aW9uIiksIGVudi5XT1JLRVJfQVBJX0tFWSkpIHsKICAgICAgICByZXR1cm4gUmVzcG9uc2UuanNvbih7IGVycm9yOiAidW5hdXRob3JpemVkIiB9LCB7IHN0YXR1czogNDAxIH0pOwogICAgICB9CiAgICAgIGNvbnN0IHNlY3Rpb24gPSB1cmwucGF0aG5hbWUuc2xpY2UoIi9hcGkvbW9uaXRvci8iLmxlbmd0aCk7CiAgICAgIGNvbnN0IGlkID0gZW52Lk1PTklUT1JfR0FURVdBWS5pZEZyb21OYW1lKCJtb25pdG9yLWdhdGV3YXkiKTsKICAgICAgY29uc3Qgc3R1YiA9IGVudi5NT05JVE9SX0dBVEVXQVkuZ2V0KGlkKTsKICAgICAgcmV0dXJuIHN0dWIuZmV0Y2goYGh0dHA6Ly9kby9tb25pdG9yLyR7c2VjdGlvbn1gKTsKICAgIH0KCiAgICByZXR1cm4gUmVzcG9uc2UuanNvbih7IGVycm9yOiAibm90IGZvdW5kIiB9LCB7IHN0YXR1czogNDA0IH0pOwogIH0sCn07Cg==
+/**
+ * muse-monitor — minimal standalone Worker for the Muse system monitor.
+ *
+ * Serves a read-only dashboard of the muse-vm host (the lib/muse monitor
+ * assets) and proxies section data through the MonitorGateway Durable
+ * Object's Tailscale WASM node to the shared receiver on muse-vm (:8090,
+ * GET /monitor/<section>).
+ *
+ * Deliberately NOT here: any execution path. Submitting a request is the
+ * dashboard/ask.cgi flow on the host, approval is host-side only
+ * (see lib/muse/SPEC.md). This Worker only looks.
+ *
+ * Auth (keys are separate and never mixed):
+ *   - callers present WORKER_API_KEY (Bearer) to /api/*
+ *   - the DO presents RECEIVER_API_KEY to the receiver
+ *   - the WASM node logs in with TS_AUTHKEY
+ */
+
+interface Env {
+  MONITOR_GATEWAY: DurableObjectNamespace;
+  WORKER_API_KEY: string;
+  RECEIVER_API_KEY: string;
+  RECEIVER_URL: string;
+  TS_AUTHKEY: string;
+}
+
+export { MonitorGateway } from "./do";
+
+function bearerMatches(header: string | null, expected: string): boolean {
+  if (!header || !expected) return false;
+  if (!header.startsWith("Bearer ")) return false;
+  const got = header.slice("Bearer ".length);
+  if (got.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < got.length; i++) diff |= got.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0;
+}
+
+const SECTIONS: Array<[string, string]> = [
+  ["status", "状態（tailscaled / Bridge）"],
+  ["diag", "診断サマリ（全33項目）"],
+  ["sdkhealth", "SDK ヘルス"],
+  ["jobs", "ジョブキュー"],
+  ["pending", "承認待ち"],
+  ["execlog", "実行監査ログ"],
+  ["pkgs", "パッケージ版数"],
+  ["vm", "VM 情報"],
+  ["procs", "プロセス上位"],
+  ["ports", "待ち受けポート"],
+  ["git", "git 状態"],
+  ["recent", "直近の完了ジョブ"],
+];
+
+const DASHBOARD = `<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muse-monitor</title>
+<style>
+  body { font-family: sans-serif; margin: 1em; background: #111; color: #ddd; }
+  section { border: 1px solid #2a4d2a; border-radius: 6px; padding: .4em 1em 1em; margin: 1em 0; }
+  h1 { font-size: 1.2em; } h2 { font-size: 1.05em; }
+  pre { background: #1b1b1b; border: 1px solid #333; border-radius: 6px;
+        padding: .6em 1em; overflow-x: auto; white-space: pre-wrap; }
+  .meta { color: #999; font-size: .85em; }
+  button { margin-left: .5em; }
+</style></head><body>
+<h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
+<p class="meta">実行系はここにはありません。依頼の受付はホスト側ダッシュボード、
+承認はホストのシェルでのみ行えます。</p>
+<p><label>API キー: <input type="password" id="key" size="32"></label>
+<button type="button" onclick="loadAll()">全て取得</button></p>
+<div id="sections"></div>
+<script>
+  const SECTIONS = ${JSON.stringify(SECTIONS)};
+  const root = document.getElementById('sections');
+  for (const [name, title] of SECTIONS) {
+    const s = document.createElement('section');
+    s.innerHTML = '<h2>' + title + ' <button type="button" data-s="' + name + '">再取得</button></h2><pre id="b-' + name + '">（未取得）</pre>';
+    root.appendChild(s);
+  }
+  root.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-s]');
+    if (b) load(b.dataset.s);
+  });
+  function key() { return document.getElementById('key').value.trim(); }
+  async function load(name) {
+    const el = document.getElementById('b-' + name);
+    el.textContent = '取得中…';
+    try {
+      const r = await fetch('/api/monitor/' + name, { headers: { Authorization: 'Bearer ' + key() } });
+      const j = await r.json();
+      el.textContent = j.output !== undefined ? j.output : JSON.stringify(j, null, 2);
+    } catch (err) { el.textContent = '取得失敗: ' + err; }
+  }
+  function loadAll() { for (const [name] of SECTIONS) load(name); }
+</script>
+</body></html>`;
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/health" && request.method === "GET") {
+      return Response.json({ status: "ok", worker: "muse-monitor" });
+    }
+
+    if (url.pathname === "/" && request.method === "GET") {
+      return new Response(DASHBOARD, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    if (url.pathname === "/api/status" && request.method === "GET") {
+      if (!bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
+      const stub = env.MONITOR_GATEWAY.get(id);
+      return stub.fetch("http://do/status");
+    }
+
+    if (url.pathname.startsWith("/api/monitor/") && request.method === "GET") {
+      if (!bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const section = url.pathname.slice("/api/monitor/".length);
+      const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
+      const stub = env.MONITOR_GATEWAY.get(id);
+      return stub.fetch(`http://do/monitor/${section}`);
+    }
+
+    return Response.json({ error: "not found" }, { status: 404 });
+  },
+};

@@ -1,1 +1,90 @@
-IyBtdXNlLW1vbml0b3IKCuODm+OCueODiOODnuOCt+ODs++8iG11c2Utdm3vvInjga7nirbmhYvjgpLooajnpLrjgZnjgovjgIHoqq3jgb/lj5bjgorlsILnlKjjga7jg6Ljg4vjgr8K44OA44OD44K344Ol44Oc44O844OJ44KS5o+Q5L6b44GZ44KLIENsb3VkZmxhcmUgV29ya2VyIOOBp+OBmeOAggoK44OW44Op44Km44K244GL44KJ44Gu44Oq44Kv44Ko44K544OI44KS5Y+X44GR44CBRHVyYWJsZSBPYmplY3Qg5YaF44GuIFRhaWxzY2FsZSBXQVNNCuODjuODvOODiee1jOeUseOBpyB0YWlsbmV0IOWGheOBruWPl+S/oSBBUEkg44GL44KJ44Ob44K544OI44Gu54q25oWL44KS5Y+W5b6X44GX44Gm6KGo56S644GX44G+44GZ44CCCuOBk+OBriBXb3JrZXIg6Ieq6Lqr44Gv44OH44O844K/44KS5L+d5oyB44Gb44Ga44CB5a6f6KGM57O744Gu5qmf6IO944KC5oyB44Gh44G+44Gb44KTCu+8iOihqOekuuWwgueUqO+8ieOAggoKIyMg5qeL5oiQCgpgYGAK44OW44Op44Km44K2CiAg4pSCIEhUVFBTCiAg4pa8CldvcmtlciAobXVzZS1tb25pdG9yKQogIOODu+ODgOODg+OCt+ODpeODnOODvOODieeUu+mdou+8iC/vvIkKICDjg7tBUEkg44OX44Ot44Kt44K377yIL2FwaS9tb25pdG9yLzxzZWN0aW9uPiwgL2FwaS9zdGF0dXPvvIkKICDilIIKICDilrwKRHVyYWJsZSBPYmplY3QgKE1vbml0b3JHYXRld2F5KQogIOODu1RhaWxzY2FsZSBXQVNNIOODjuODvOODieOCkuS/neaMgeOBl+OAgXRhaWxuZXQg57WM55Sx44Gn5Y+X5L+hIEFQSSDjgpLlkbzjgbYKICDilIIKICDilrwK5Y+X5L+hIEFQSe+8iOODm+OCueODiOWBtOOAgXRhaWxuZXQg5YaFIDo4MDkw77yJCiAg44O7R0VUIC9tb25pdG9yLzxzZWN0aW9uPiDjgafjg5vjgrnjg4jjga7nirbmhYvjgpIgSlNPTiDjgafov5TjgZkKYGBgCgojIyDooajnpLrpoIXnm64KCnwgc2VjdGlvbiAgIHwg5YaF5a65ICAgICAgICAgICAgICAgICAgICAgfAp8LS0tLS0tLS0tLS18LS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS18Cnwgc3RhdHVzICAgIHwg44OH44O844Oi44Oz44Gu54q25oWLICAgICAgICAgICB8CnwgZGlhZyAgICAgIHwg44K344K544OG44Og6Ki65pat44K144Oe44OqICAgICAgIHwKfCBzZGtoZWFsdGggfCBTREsg44OY44Or44K544OB44Kn44OD44KvICAgICAgIHwKfCBqb2JzICAgICAgfCDjgrjjg6fjg5bjgq3jg6Xjg7wgICAgICAgICAgICAgfAp8IHBlbmRpbmcgICB8IOaJv+iqjeW+heOBoeODquOCr+OCqOOCueODiCAgICAgICB8CnwgZXhlY2xvZyAgIHwg5a6f6KGM55uj5p+744Ot44KwICAgICAgICAgICAgIHwKfCBwa2dzICAgICAgfCDjg5Hjg4PjgrHjg7zjgrjjga7jg5Djg7zjgrjjg6fjg7MgICB8Cnwgdm0gICAgICAgIHwgVk0g5oOF5aCxICAgICAgICAgICAgICAgICAgfAp8IHByb2NzICAgICB8IOODl+ODreOCu+OCueS4gOimp++8iOS4iuS9je+8iSAgICAgfAp8IHBvcnRzICAgICB8IOW+heOBoeWPl+OBkeODneODvOODiCAgICAgICAgICAgfAp8IGdpdCAgICAgICB8IOODquODneOCuOODiOODquOBrueKtuaFiyAgICAgICAgIHwKfCByZWNlbnQgICAgfCDnm7Tov5Hjga7lrozkuobjgrjjg6fjg5YgICAgICAgICB8CgojIyDjgqjjg7Pjg4njg53jgqTjg7Pjg4gKCnwg44OR44K5ICAgICAgICAgICAgICAgICAgICB8IOiqjeiovCAgICAgICAgICB8IOiqrOaYjiAgICAgICAgICAgICAgICAgICAgIHwKfC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS18LS0tLS0tLS0tLS0tLS0tfC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tfAp8IGBHRVQgL2AgICAgICAgICAgICAgICAgIHwg5LiN6KaBICAgICAgICAgIHwg44OA44OD44K344Ol44Oc44O844OJ55S76Z2iICAgICAgIHwKfCBgR0VUIC9oZWFsdGhgICAgICAgICAgICB8IOS4jeimgSAgICAgICAgICB8IFdvcmtlciDoh6rouqvjga7mrbvmtLsgICAgICAgIHwKfCBgR0VUIC9hcGkvc3RhdHVzYCAgICAgICB8IFdPUktFUl9BUElfS0VZIHwgV0FTTSDjg47jg7zjg4njga7nirbmhYsgICAgICAgfAp8IGBHRVQgL2FwaS9tb25pdG9yLzxzPmAgIHwgV09SS0VSX0FQSV9LRVkgfCBzZWN0aW9uIOOBruODh+ODvOOCv+OCkui/lOOBmSAgfAoK44OA44OD44K344Ol44Oc44O844OJ55S76Z2i44Gn44GvIEFQSSDjgq3jg7zjgpLlhaXlipvjgZfjgablj5blvpfjgZfjgb7jgZkK77yI44Kt44O844Gv44OW44Op44Km44K244Gu5aSW44Gr6YCB5L+h44GV44KM44G+44Gb44KT77yJ44CCCgojIyDjgrfjg7zjgq/jg6zjg4Pjg4gKCuODh+ODl+ODreOCpOaZguOBq+S7peS4i+OCkiBXb3JrZXIg44Gu44K344O844Kv44Os44OD44OI44Go44GX44Gm6Kit5a6a44GX44G+44GZCu+8iOODquODneOCuOODiOODquOBq+OBr+WQq+OCgeOBvuOBm+OCk++8ieOAggoKfCDlkI3liY0gICAgICAgICAgICAgIHwg55So6YCUICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB8CnwtLS0tLS0tLS0tLS0tLS0tLS0tfC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS18CnwgYFRTX0FVVEhLRVlgICAgICAgfCBXQVNNIOODjuODvOODieOBriBUYWlsc2NhbGUg44Ot44Kw44Kk44OzICAgICAgIHwKfCBgUkVDRUlWRVJfQVBJX0tFWWB8IOWPl+S/oSBBUEkg44G444GuIEJlYXJlciDoqo3oqLwgICAgICAgICAgICAgIHwKfCBgV09SS0VSX0FQSV9LRVlgICB8IGAvYXBpLypgIOOBuOOBriBCZWFyZXIg6KqN6Ki8ICAgICAgICAgICAgICB8Cgrlj5fkv6EgQVBJIOOBruOCouODieODrOOCueOBryBgd3JhbmdsZXIudG9tbGAg44GuIGBSRUNFSVZFUl9VUkxgIOOBp+aMh+WumuOBl+OBvuOBmeOAggoKIyMg44OH44OX44Ot44KkCgpgYGBzaApucG0gaW5zdGFsbApucHggd3JhbmdsZXIgc2VjcmV0IHB1dCBUU19BVVRIS0VZCm5weCB3cmFuZ2xlciBzZWNyZXQgcHV0IFJFQ0VJVkVSX0FQSV9LRVkKbnB4IHdyYW5nbGVyIHNlY3JldCBwdXQgV09SS0VSX0FQSV9LRVkKbnB4IHdyYW5nbGVyIGRlcGxveQpgYGAKCkdpdEh1YiDpgKPmkLrvvIhXb3JrZXJzIEJ1aWxkc++8ieOCkuS9v+OBhuWgtOWQiOOBr+OAgeOBk+OBruODquODneOCuOODiOODquOCkuaOpee2muOBl+OAgQrmnKznlarjg5bjg6njg7Pjg4HjgpIgYG1haW5gIOOBq+ioreWumuOBl+OBvuOBmeOAggoKIyMg6ZaL55m6CgpgYGBzaApucG0gaW5zdGFsbApucG0gcnVuIHR5cGVjaGVjayAgICMgdHNjIOOBq+OCiOOCi+Wei+ODgeOCp+ODg+OCrwpgYGAK
+# muse-monitor
+
+ホストマシン（muse-vm）の状態を表示する、読み取り専用のモニタ
+ダッシュボードを提供する Cloudflare Worker です。
+
+ブラウザからのリクエストを受け、Durable Object 内の Tailscale WASM
+ノード経由で tailnet 内の受信 API からホストの状態を取得して表示します。
+この Worker 自身はデータを保持せず、実行系の機能も持ちません
+（表示専用）。
+
+## 構成
+
+```
+ブラウザ
+  │ HTTPS
+  ▼
+Worker (muse-monitor)
+  ・ダッシュボード画面（/）
+  ・API プロキシ（/api/monitor/<section>, /api/status）
+  │
+  ▼
+Durable Object (MonitorGateway)
+  ・Tailscale WASM ノードを保持し、tailnet 経由で受信 API を呼ぶ
+  │
+  ▼
+受信 API（ホスト側、tailnet 内 :8090）
+  ・GET /monitor/<section> でホストの状態を JSON で返す
+```
+
+## 表示項目
+
+| section   | 内容                     |
+|-----------|--------------------------|
+| status    | デーモンの状態           |
+| diag      | システム診断サマリ       |
+| sdkhealth | SDK ヘルスチェック       |
+| jobs      | ジョブキュー             |
+| pending   | 承認待ちリクエスト       |
+| execlog   | 実行監査ログ             |
+| pkgs      | パッケージのバージョン   |
+| vm        | VM 情報                  |
+| procs     | プロセス一覧（上位）     |
+| ports     | 待ち受けポート           |
+| git       | リポジトリの状態         |
+| recent    | 直近の完了ジョブ         |
+
+## エンドポイント
+
+| パス                    | 認証          | 説明                     |
+|-------------------------|---------------|--------------------------|
+| `GET /`                 | 不要          | ダッシュボード画面       |
+| `GET /health`           | 不要          | Worker 自身の死活        |
+| `GET /api/status`       | WORKER_API_KEY | WASM ノードの状態       |
+| `GET /api/monitor/<s>`  | WORKER_API_KEY | section のデータを返す  |
+
+ダッシュボード画面では API キーを入力して取得します
+（キーはブラウザの外に送信されません）。
+
+## シークレット
+
+デプロイ時に以下を Worker のシークレットとして設定します
+（リポジトリには含めません）。
+
+| 名前              | 用途                                   |
+|-------------------|----------------------------------------|
+| `TS_AUTHKEY`      | WASM ノードの Tailscale ログイン       |
+| `RECEIVER_API_KEY`| 受信 API への Bearer 認証              |
+| `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
+
+受信 API のアドレスは `wrangler.toml` の `RECEIVER_URL` で指定します。
+
+## デプロイ
+
+```sh
+npm install
+npx wrangler secret put TS_AUTHKEY
+npx wrangler secret put RECEIVER_API_KEY
+npx wrangler secret put WORKER_API_KEY
+npx wrangler deploy
+```
+
+GitHub 連携（Workers Builds）を使う場合は、このリポジトリを接続し、
+本番ブランチを `main` に設定します。
+
+## 開発
+
+```sh
+npm install
+npm run typecheck   # tsc による型チェック
+```

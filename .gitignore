@@ -1,1 +1,3 @@
-bm9kZV9tb2R1bGVzLwoud3JhbmdsZXIvCi5kZXYudmFycyoK
+node_modules/
+.wrangler/
+.dev.vars*

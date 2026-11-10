@@ -1,1 +1,228 @@
-LyoqCiAqIE1vbml0b3JHYXRld2F5IOKAlCBvbmUgRHVyYWJsZSBPYmplY3QgaG9sZGluZyBvbmUgVGFpbHNjYWxlIFdBU00gbm9kZS4KICoKICogUmVhZC1vbmx5IG1vbml0b3IgdHJhbnNwb3J0OiB0aGUgbm9kZSBHRVRzIC9tb25pdG9yLzxzZWN0aW9uPiBmcm9tIHRoZQogKiBzaGFyZWQgcmVjZWl2ZXIgb24gbXVzZS12bSAodGhlIG11c2UtY29kZS13YXNtIHJlY2VpdmVyIG9uIDo4MDkwKSBvdmVyCiAqIHRoZSB0YWlsbmV0LiBUaGVyZSBpcyBubyB3cml0ZSBwYXRoIGhlcmUgYXQgYWxsLgogKgogKiBTdGF0ZSBwZXJzaXN0ZW5jZSBmb2xsb3dzIHRoZSBtdXNlLWNvZGUtd2FzbSBDb2RlR2F0ZXdheSBwYXR0ZXJuOgogKiB0aGUgcGFja2FnZSdzIHN0YXRlU3RvcmFnZSBpbnRlcmZhY2UgaXMgc3luY2hyb25vdXMgd2hpbGUgRE8gc3RvcmFnZQogKiBpcyBhc3luYywgc28gc3RhdGUgbGl2ZXMgaW4gYW4gaW4tbWVtb3J5IE1hcCAoc291cmNlIG9mIHRydXRoIHdoaWxlCiAqIGFsaXZlKSBhbmQgaXMgZmx1c2hlZCB0byBETyBzdG9yYWdlIGFzeW5jaHJvbm91c2x5IGFmdGVyIGV2ZXJ5CiAqIHNldFN0YXRlLiBBIERPIGV2aWN0aW9uIGJlZm9yZSBhIGZsdXNoIGNhbiBsb3NlIHRoZSBsYXRlc3Qgc3RhdGU7IG9uCiAqIHRoZSBuZXh0IHN0YXJ0IHRoZSBub2RlIHJlLWxvZ3MgaW4gd2l0aCB0aGUgYXV0aCBrZXkgYW5kIHJlLXJlZ2lzdGVycwogKiAoZXBoZW1lcmFsOiBmYWxzZSBrZWVwcyB0aGUgbm9kZSBpZGVudGl0eSBpbiB0aGUgcGVyc2lzdGVkIHByb2ZpbGUpLgogKi8KCmltcG9ydCB7IER1cmFibGVPYmplY3QgfSBmcm9tICJjbG91ZGZsYXJlOndvcmtlcnMiOwppbXBvcnQgd2FzbU1vZHVsZSBmcm9tICJAYWktZWNvdmVyc2Uvd2FzbS10YWlsc2NhbGUvbWFpbi53YXNtIjsKLy8gR28ncyB3YXNtX2V4ZWMuanMgZGVmaW5lcyBnbG9iYWxUaGlzLkdvIChicm93c2VyIHBhdGggaW4gYSBXb3JrZXIpLgovLyBlc2xpbnQtZGlzYWJsZS1uZXh0LWxpbmUgQHR5cGVzY3JpcHQtZXNsaW50L25vLXVudXNlZC12YXJzCmltcG9ydCAiQGFpLWVjb3ZlcnNlL3dhc20tdGFpbHNjYWxlL3dhc21fZXhlYy5qcyI7CmltcG9ydCB0eXBlIHsKICBJUE4sCiAgSVBOQ2FsbGJhY2tzLAogIElQTkNvbmZpZywKfSBmcm9tICIuL3dhc20taXBuIjsKCmludGVyZmFjZSBFbnYgewogIFRTX0FVVEhLRVk6IHN0cmluZzsKICBSRUNFSVZFUl9BUElfS0VZOiBzdHJpbmc7CiAgUkVDRUlWRVJfVVJMOiBzdHJpbmc7Cn0KCmNvbnN0IFNUQVRFX0tFWSA9ICJ0cy1zdGF0ZSI7CmNvbnN0IE1BWF9SRVNQT05TRV9CWVRFUyA9IDggKiAxMDI0ICogMTAyNDsKY29uc3QgU0VDVElPTlMgPSBuZXcgU2V0KFsKICAic3RhdHVzIiwgImRpYWciLCAiam9icyIsICJwa2dzIiwgInZtIiwgInByb2NzIiwKICAicG9ydHMiLCAiZ2l0IiwgInJlY2VudCIsICJwZW5kaW5nIiwgImV4ZWNsb2ciLCAic2RraGVhbHRoIiwKXSk7CgpleHBvcnQgY2xhc3MgTW9uaXRvckdhdGV3YXkgZXh0ZW5kcyBEdXJhYmxlT2JqZWN0PEVudj4gewogIHByaXZhdGUgaXBuOiBJUE4gfCBudWxsID0gbnVsbDsKICBwcml2YXRlIHJlYWR5OiBQcm9taXNlPHZvaWQ+IHwgbnVsbCA9IG51bGw7CiAgcHJpdmF0ZSByZWFkeVJlc29sdmU6ICgoKSA9PiB2b2lkKSB8IG51bGwgPSBudWxsOwogIHByaXZhdGUgcmVhZHlSZWplY3Q6ICgoZXJyOiBFcnJvcikgPT4gdm9pZCkgfCBudWxsID0gbnVsbDsKICBwcml2YXRlIHN0YXRlID0gbmV3IE1hcDxzdHJpbmcsIHN0cmluZz4oKTsKICBwcml2YXRlIHN0YXRlTG9hZGVkID0gZmFsc2U7CiAgcHJpdmF0ZSBmbHVzaFBlbmRpbmc6IFByb21pc2U8dm9pZD4gfCBudWxsID0gbnVsbDsKICBwcml2YXRlIGxhc3RTdGF0dXMgPSAibm90LXN0YXJ0ZWQiOwogIHByaXZhdGUgbGFzdEVycm9yOiBzdHJpbmcgfCBudWxsID0gbnVsbDsKCiAgY29uc3RydWN0b3IoY3R4OiBEdXJhYmxlT2JqZWN0U3RhdGUsIGVudjogRW52KSB7CiAgICBzdXBlcihjdHgsIGVudik7CiAgICB0aGlzLnJlYWR5ID0gbmV3IFByb21pc2U8dm9pZD4oKHJlc29sdmUsIHJlamVjdCkgPT4gewogICAgICB0aGlzLnJlYWR5UmVzb2x2ZSA9IHJlc29sdmU7CiAgICAgIHRoaXMucmVhZHlSZWplY3QgPSByZWplY3Q7CiAgICB9KTsKICB9CgogIHByaXZhdGUgYXN5bmMgbG9hZFN0YXRlKCk6IFByb21pc2U8dm9pZD4gewogICAgaWYgKHRoaXMuc3RhdGVMb2FkZWQpIHJldHVybjsKICAgIGNvbnN0IHN0b3JlZCA9IGF3YWl0IHRoaXMuY3R4LnN0b3JhZ2UuZ2V0PFJlY29yZDxzdHJpbmcsIHN0cmluZz4+KFNUQVRFX0tFWSk7CiAgICBpZiAoc3RvcmVkKSB7CiAgICAgIGZvciAoY29uc3QgW2ssIHZdIG9mIE9iamVjdC5lbnRyaWVzKHN0b3JlZCkpIHRoaXMuc3RhdGUuc2V0KGssIHYpOwogICAgfQogICAgdGhpcy5zdGF0ZUxvYWRlZCA9IHRydWU7CiAgfQoKICBwcml2YXRlIGZsdXNoU3RhdGUoKTogdm9pZCB7CiAgICBjb25zdCBzbmFwc2hvdCA9IE9iamVjdC5mcm9tRW50cmllcyh0aGlzLnN0YXRlKTsKICAgIHRoaXMuZmx1c2hQZW5kaW5nID0gdGhpcy5jdHguc3RvcmFnZQogICAgICAucHV0KFNUQVRFX0tFWSwgc25hcHNob3QpCiAgICAgIC5jYXRjaCgoZXJyOiB1bmtub3duKSA9PiB7CiAgICAgICAgdGhpcy5sYXN0RXJyb3IgPSBgc3RhdGUgZmx1c2ggZmFpbGVkOiAke1N0cmluZyhlcnIpfWA7CiAgICAgIH0pOwogICAgdGhpcy5jdHgud2FpdFVudGlsKHRoaXMuZmx1c2hQZW5kaW5nKTsKICB9CgogIHByaXZhdGUgYXN5bmMgZW5zdXJlTm9kZSgpOiBQcm9taXNlPElQTj4gewogICAgaWYgKHRoaXMuaXBuKSByZXR1cm4gdGhpcy5pcG47CiAgICBhd2FpdCB0aGlzLmxvYWRTdGF0ZSgpOwogICAgaWYgKCF0aGlzLmVudi5UU19BVVRIS0VZKSB7CiAgICAgIHRocm93IG5ldyBFcnJvcigiVFNfQVVUSEtFWSBzZWNyZXQgaXMgbm90IHNldCIpOwogICAgfQoKICAgIGNvbnN0IGdvID0gbmV3IEdvKCk7CiAgICBjb25zdCBpbnN0YW5jZSA9IGF3YWl0IFdlYkFzc2VtYmx5Lmluc3RhbnRpYXRlKHdhc21Nb2R1bGUsIGdvLmltcG9ydE9iamVjdCk7CiAgICB2b2lkIGdvLnJ1bihpbnN0YW5jZSk7CiAgICBjb25zdCBjcmVhdGVkID0gbmV3SVBOKHsKICAgICAgYXV0aEtleTogdGhpcy5lbnYuVFNfQVVUSEtFWSwKICAgICAgaG9zdG5hbWU6ICJtdXNlLW1vbml0b3IiLAogICAgICBlcGhlbWVyYWw6IGZhbHNlLAogICAgICBsb2dVcGxvYWQ6IGZhbHNlLAogICAgICBzdGF0ZVN0b3JhZ2U6IHsKICAgICAgICBnZXRTdGF0ZTogKGlkOiBzdHJpbmcpID0+IHRoaXMuc3RhdGUuZ2V0KGlkKSA/PyAiIiwKICAgICAgICBzZXRTdGF0ZTogKGlkOiBzdHJpbmcsIHZhbHVlOiBzdHJpbmcpID0+IHsKICAgICAgICAgIHRoaXMuc3RhdGUuc2V0KGlkLCB2YWx1ZSk7CiAgICAgICAgICB0aGlzLmZsdXNoU3RhdGUoKTsKICAgICAgICB9LAogICAgICB9LAogICAgfSk7CiAgICBpZiAoY3JlYXRlZCBpbnN0YW5jZW9mIEVycm9yKSB7CiAgICAgIHRocm93IG5ldyBFcnJvcihgbmV3SVBOIGZhaWxlZDogJHtjcmVhdGVkLm1lc3NhZ2V9YCk7CiAgICB9CiAgICBjb25zdCBpcG4gPSBjcmVhdGVkOwogICAgdGhpcy5pcG4gPSBpcG47CgogICAgY29uc3QgY2FsbGJhY2tzOiBJUE5DYWxsYmFja3MgPSB7CiAgICAgIG5vdGlmeVN0YXRlOiAoc3RhdGU6IHN0cmluZykgPT4gewogICAgICAgIHRoaXMubGFzdFN0YXR1cyA9IHN0YXRlOwogICAgICAgIGlmIChzdGF0ZSA9PT0gIlJ1bm5pbmciKSB0aGlzLnJlYWR5UmVzb2x2ZT8uKCk7CiAgICAgIH0sCiAgICAgIG5vdGlmeU5ldE1hcDogKCkgPT4gdW5kZWZpbmVkLAogICAgICBub3RpZnlCcm93c2VUb1VSTDogKCkgPT4gdW5kZWZpbmVkLAogICAgICBub3RpZnlQYW5pY1JlY292ZXI6IChlcnJvcjogc3RyaW5nKSA9PiB7CiAgICAgICAgdGhpcy5sYXN0RXJyb3IgPSBlcnJvcjsKICAgICAgICB0aGlzLnJlYWR5UmVqZWN0Py4obmV3IEVycm9yKGVycm9yKSk7CiAgICAgIH0sCiAgICB9OwogICAgaXBuLnJ1bihjYWxsYmFja3MpOwogICAgaXBuLmxvZ2luKHRoaXMuZW52LlRTX0FVVEhLRVkpOwoKICAgIGNvbnN0IHRpbWVvdXQgPSBuZXcgUHJvbWlzZTx2b2lkPigoXywgcmVqZWN0KSA9PgogICAgICBzZXRUaW1lb3V0KCgpID0+IHJlamVjdChuZXcgRXJyb3IoInRhaWxzY2FsZSBub2RlIGRpZCBub3QgcmVhY2ggUnVubmluZyBpbiA2MHMiKSksIDYwXzAwMCksCiAgICApOwogICAgYXdhaXQgUHJvbWlzZS5yYWNlKFt0aGlzLnJlYWR5LCB0aW1lb3V0XSk7CiAgICByZXR1cm4gaXBuOwogIH0KCiAgLyoqIER1cmFibGUgT2JqZWN0IGVudHJ5cG9pbnQ6IC9zdGF0dXMgYW5kIC9tb25pdG9yLzxzZWN0aW9uPi4gKi8KICBhc3luYyBmZXRjaChyZXF1ZXN0OiBSZXF1ZXN0KTogUHJvbWlzZTxSZXNwb25zZT4gewogICAgY29uc3QgdXJsID0gbmV3IFVSTChyZXF1ZXN0LnVybCk7CiAgICBpZiAodXJsLnBhdGhuYW1lID09PSAiL3N0YXR1cyIpIHJldHVybiB0aGlzLnN0YXR1cygpOwogICAgaWYgKHVybC5wYXRobmFtZS5zdGFydHNXaXRoKCIvbW9uaXRvci8iKSkgewogICAgICBjb25zdCBzZWN0aW9uID0gdXJsLnBhdGhuYW1lLnNsaWNlKCIvbW9uaXRvci8iLmxlbmd0aCk7CiAgICAgIGlmICghU0VDVElPTlMuaGFzKHNlY3Rpb24pKSB7CiAgICAgICAgcmV0dXJuIFJlc3BvbnNlLmpzb24oeyBlcnJvcjogInVua25vd24gbW9uaXRvciBzZWN0aW9uIiB9LCB7IHN0YXR1czogNDA0IH0pOwogICAgICB9CiAgICAgIHJldHVybiB0aGlzLm1vbml0b3Ioc2VjdGlvbik7CiAgICB9CiAgICByZXR1cm4gUmVzcG9uc2UuanNvbih7IGVycm9yOiAibm90IGZvdW5kIiB9LCB7IHN0YXR1czogNDA0IH0pOwogIH0KCiAgLyoqIEdFVCBvbmUgbW9uaXRvciBzZWN0aW9uIGZyb20gdGhlIHJlY2VpdmVyIHRocm91Z2ggdGhlIHRhaWxuZXQuICovCiAgYXN5bmMgbW9uaXRvcihzZWN0aW9uOiBzdHJpbmcpOiBQcm9taXNlPFJlc3BvbnNlPiB7CiAgICBsZXQgaXBuOiBJUE47CiAgICB0cnkgewogICAgICBpcG4gPSBhd2FpdCB0aGlzLmVuc3VyZU5vZGUoKTsKICAgIH0gY2F0Y2ggKGVycikgewogICAgICByZXR1cm4gUmVzcG9uc2UuanNvbigKICAgICAgICB7IGVycm9yOiAidGFpbG5ldF91bmF2YWlsYWJsZSIsIG1lc3NhZ2U6IFN0cmluZyhlcnIpIH0sCiAgICAgICAgeyBzdGF0dXM6IDUwMiB9LAogICAgICApOwogICAgfQogICAgY29uc3QgdXJsID0gYCR7dGhpcy5lbnYuUkVDRUlWRVJfVVJMLnJlcGxhY2UoL1wvJC8sICIiKX0vbW9uaXRvci8ke3NlY3Rpb259YDsKICAgIGxldCByZXNwOwogICAgdHJ5IHsKICAgICAgcmVzcCA9IGF3YWl0IGlwbi5mZXRjaCh7CiAgICAgICAgdXJsLAogICAgICAgIG1ldGhvZDogIkdFVCIsCiAgICAgICAgaGVhZGVyczogW1siQXV0aG9yaXphdGlvbiIsIGBCZWFyZXIgJHt0aGlzLmVudi5SRUNFSVZFUl9BUElfS0VZfWBdXSwKICAgICAgfSk7CiAgICB9IGNhdGNoIChlcnIpIHsKICAgICAgcmV0dXJuIFJlc3BvbnNlLmpzb24oCiAgICAgICAgeyBlcnJvcjogImRlbGl2ZXJ5X3Vua25vd24iLCBtZXNzYWdlOiBgdGFpbG5ldCBHRVQgZmFpbGVkOiAke1N0cmluZyhlcnIpfWAgfSwKICAgICAgICB7IHN0YXR1czogNTAyIH0sCiAgICAgICk7CiAgICB9CiAgICBjb25zdCBjaHVua3M6IFVpbnQ4QXJyYXlbXSA9IFtdOwogICAgbGV0IHRvdGFsID0gMDsKICAgIHRyeSB7CiAgICAgIGZvciAoOzspIHsKICAgICAgICBjb25zdCBjaHVuayA9IGF3YWl0IHJlc3AucmVhZCgpOwogICAgICAgIGlmIChjaHVuayA9PT0gbnVsbCkgYnJlYWs7CiAgICAgICAgdG90YWwgKz0gY2h1bmsubGVuZ3RoOwogICAgICAgIGlmICh0b3RhbCA+IE1BWF9SRVNQT05TRV9CWVRFUykgewogICAgICAgICAgcmVzcC5jYW5jZWwoKTsKICAgICAgICAgIHJldHVybiBSZXNwb25zZS5qc29uKAogICAgICAgICAgICB7IGVycm9yOiAicmVzcG9uc2VfdG9vX2xhcmdlIiwgbWVzc2FnZTogInJlY2VpdmVyIHJlc3BvbnNlIGV4Y2VlZGVkIDggTWlCIiB9LAogICAgICAgICAgICB7IHN0YXR1czogNTAyIH0sCiAgICAgICAgICApOwogICAgICAgIH0KICAgICAgICBjaHVua3MucHVzaChjaHVuayk7CiAgICAgIH0KICAgIH0gY2F0Y2ggKGVycikgewogICAgICByZXR1cm4gUmVzcG9uc2UuanNvbigKICAgICAgICB7IGVycm9yOiAiZGVsaXZlcnlfdW5rbm93biIsIG1lc3NhZ2U6IGByZWFkaW5nIHJlY2VpdmVyIHJlc3BvbnNlIGZhaWxlZDogJHtTdHJpbmcoZXJyKX1gIH0sCiAgICAgICAgeyBzdGF0dXM6IDUwMiB9LAogICAgICApOwogICAgfQogICAgY29uc3QgbWVyZ2VkID0gbmV3IFVpbnQ4QXJyYXkodG90YWwpOwogICAgbGV0IG9mZnNldCA9IDA7CiAgICBmb3IgKGNvbnN0IGMgb2YgY2h1bmtzKSB7CiAgICAgIG1lcmdlZC5zZXQoYywgb2Zmc2V0KTsKICAgICAgb2Zmc2V0ICs9IGMubGVuZ3RoOwogICAgfQogICAgY29uc3QgdGV4dCA9IG5ldyBUZXh0RGVjb2RlcigpLmRlY29kZShtZXJnZWQpOwogICAgcmV0dXJuIG5ldyBSZXNwb25zZSh0ZXh0LCB7CiAgICAgIHN0YXR1czogcmVzcC5zdGF0dXMsCiAgICAgIGhlYWRlcnM6IHsgIkNvbnRlbnQtVHlwZSI6ICJhcHBsaWNhdGlvbi9qc29uIiB9LAogICAgfSk7CiAgfQoKICAvKiogTm9kZSBzdGF0dXMgZm9yIGRpYWdub3N0aWNzIChubyBzZWNyZXRzKS4gKi8KICBhc3luYyBzdGF0dXMoKTogUHJvbWlzZTxSZXNwb25zZT4gewogICAgaWYgKCF0aGlzLmlwbikgewogICAgICByZXR1cm4gUmVzcG9uc2UuanNvbih7CiAgICAgICAgbm9kZTogIm5vdC1zdGFydGVkIiwKICAgICAgICBsYXN0U3RhdHVzOiB0aGlzLmxhc3RTdGF0dXMsCiAgICAgICAgbGFzdEVycm9yOiB0aGlzLmxhc3RFcnJvciwKICAgICAgfSk7CiAgICB9CiAgICBjb25zdCByYXcgPSB0aGlzLmlwbi5zdGF0dXMoKTsKICAgIGxldCBwYXJzZWQ6IHVua25vd24gPSByYXc7CiAgICBpZiAodHlwZW9mIHJhdyA9PT0gInN0cmluZyIpIHsKICAgICAgdHJ5IHsKICAgICAgICBwYXJzZWQgPSBKU09OLnBhcnNlKHJhdyk7CiAgICAgIH0gY2F0Y2ggewogICAgICAgIHBhcnNlZCA9IHsgcmF3IH07CiAgICAgIH0KICAgIH0KICAgIHJldHVybiBSZXNwb25zZS5qc29uKHsKICAgICAgbm9kZTogdGhpcy5sYXN0U3RhdHVzLAogICAgICBsYXN0RXJyb3I6IHRoaXMubGFzdEVycm9yLAogICAgICB0YWlsc2NhbGU6IHBhcnNlZCwKICAgIH0pOwogIH0KfQo=
+/**
+ * MonitorGateway — one Durable Object holding one Tailscale WASM node.
+ *
+ * Read-only monitor transport: the node GETs /monitor/<section> from the
+ * shared receiver on muse-vm (the muse-code-wasm receiver on :8090) over
+ * the tailnet. There is no write path here at all.
+ *
+ * State persistence follows the muse-code-wasm CodeGateway pattern:
+ * the package's stateStorage interface is synchronous while DO storage
+ * is async, so state lives in an in-memory Map (source of truth while
+ * alive) and is flushed to DO storage asynchronously after every
+ * setState. A DO eviction before a flush can lose the latest state; on
+ * the next start the node re-logs in with the auth key and re-registers
+ * (ephemeral: false keeps the node identity in the persisted profile).
+ */
+
+import { DurableObject } from "cloudflare:workers";
+import wasmModule from "@ai-ecoverse/wasm-tailscale/main.wasm";
+// Go's wasm_exec.js defines globalThis.Go (browser path in a Worker).
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import "@ai-ecoverse/wasm-tailscale/wasm_exec.js";
+import type {
+  IPN,
+  IPNCallbacks,
+  IPNConfig,
+} from "./wasm-ipn";
+
+interface Env {
+  TS_AUTHKEY: string;
+  RECEIVER_API_KEY: string;
+  RECEIVER_URL: string;
+}
+
+const STATE_KEY = "ts-state";
+const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const SECTIONS = new Set([
+  "status", "diag", "jobs", "pkgs", "vm", "procs",
+  "ports", "git", "recent", "pending", "execlog", "sdkhealth",
+]);
+
+export class MonitorGateway extends DurableObject<Env> {
+  private ipn: IPN | null = null;
+  private ready: Promise<void> | null = null;
+  private readyResolve: (() => void) | null = null;
+  private readyReject: ((err: Error) => void) | null = null;
+  private state = new Map<string, string>();
+  private stateLoaded = false;
+  private flushPending: Promise<void> | null = null;
+  private lastStatus = "not-started";
+  private lastError: string | null = null;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    this.ready = new Promise<void>((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
+    });
+  }
+
+  private async loadState(): Promise<void> {
+    if (this.stateLoaded) return;
+    const stored = await this.ctx.storage.get<Record<string, string>>(STATE_KEY);
+    if (stored) {
+      for (const [k, v] of Object.entries(stored)) this.state.set(k, v);
+    }
+    this.stateLoaded = true;
+  }
+
+  private flushState(): void {
+    const snapshot = Object.fromEntries(this.state);
+    this.flushPending = this.ctx.storage
+      .put(STATE_KEY, snapshot)
+      .catch((err: unknown) => {
+        this.lastError = `state flush failed: ${String(err)}`;
+      });
+    this.ctx.waitUntil(this.flushPending);
+  }
+
+  private async ensureNode(): Promise<IPN> {
+    if (this.ipn) return this.ipn;
+    await this.loadState();
+    if (!this.env.TS_AUTHKEY) {
+      throw new Error("TS_AUTHKEY secret is not set");
+    }
+
+    const go = new Go();
+    const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
+    void go.run(instance);
+    const created = newIPN({
+      authKey: this.env.TS_AUTHKEY,
+      hostname: "muse-monitor",
+      ephemeral: false,
+      logUpload: false,
+      stateStorage: {
+        getState: (id: string) => this.state.get(id) ?? "",
+        setState: (id: string, value: string) => {
+          this.state.set(id, value);
+          this.flushState();
+        },
+      },
+    });
+    if (created instanceof Error) {
+      throw new Error(`newIPN failed: ${created.message}`);
+    }
+    const ipn = created;
+    this.ipn = ipn;
+
+    const callbacks: IPNCallbacks = {
+      notifyState: (state: string) => {
+        this.lastStatus = state;
+        if (state === "Running") this.readyResolve?.();
+      },
+      notifyNetMap: () => undefined,
+      notifyBrowseToURL: () => undefined,
+      notifyPanicRecover: (error: string) => {
+        this.lastError = error;
+        this.readyReject?.(new Error(error));
+      },
+    };
+    ipn.run(callbacks);
+    ipn.login(this.env.TS_AUTHKEY);
+
+    const timeout = new Promise<void>((_, reject) =>
+      setTimeout(() => reject(new Error("tailscale node did not reach Running in 60s")), 60_000),
+    );
+    await Promise.race([this.ready, timeout]);
+    return ipn;
+  }
+
+  /** Durable Object entrypoint: /status and /monitor/<section>. */
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/status") return this.status();
+    if (url.pathname.startsWith("/monitor/")) {
+      const section = url.pathname.slice("/monitor/".length);
+      if (!SECTIONS.has(section)) {
+        return Response.json({ error: "unknown monitor section" }, { status: 404 });
+      }
+      return this.monitor(section);
+    }
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+
+  /** GET one monitor section from the receiver through the tailnet. */
+  async monitor(section: string): Promise<Response> {
+    let ipn: IPN;
+    try {
+      ipn = await this.ensureNode();
+    } catch (err) {
+      return Response.json(
+        { error: "tailnet_unavailable", message: String(err) },
+        { status: 502 },
+      );
+    }
+    const url = `${this.env.RECEIVER_URL.replace(/\/$/, "")}/monitor/${section}`;
+    let resp;
+    try {
+      resp = await ipn.fetch({
+        url,
+        method: "GET",
+        headers: [["Authorization", `Bearer ${this.env.RECEIVER_API_KEY}`]],
+      });
+    } catch (err) {
+      return Response.json(
+        { error: "delivery_unknown", message: `tailnet GET failed: ${String(err)}` },
+        { status: 502 },
+      );
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const chunk = await resp.read();
+        if (chunk === null) break;
+        total += chunk.length;
+        if (total > MAX_RESPONSE_BYTES) {
+          resp.cancel();
+          return Response.json(
+            { error: "response_too_large", message: "receiver response exceeded 8 MiB" },
+            { status: 502 },
+          );
+        }
+        chunks.push(chunk);
+      }
+    } catch (err) {
+      return Response.json(
+        { error: "delivery_unknown", message: `reading receiver response failed: ${String(err)}` },
+        { status: 502 },
+      );
+    }
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      merged.set(c, offset);
+      offset += c.length;
+    }
+    const text = new TextDecoder().decode(merged);
+    return new Response(text, {
+      status: resp.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  /** Node status for diagnostics (no secrets). */
+  async status(): Promise<Response> {
+    if (!this.ipn) {
+      return Response.json({
+        node: "not-started",
+        lastStatus: this.lastStatus,
+        lastError: this.lastError,
+      });
+    }
+    const raw = this.ipn.status();
+    let parsed: unknown = raw;
+    if (typeof raw === "string") {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = { raw };
+      }
+    }
+    return Response.json({
+      node: this.lastStatus,
+      lastError: this.lastError,
+      tailscale: parsed,
+    });
+  }
+}
