@@ -22,9 +22,58 @@ interface Env {
   RECEIVER_API_KEY: string;
   RECEIVER_URL: string;
   TS_AUTHKEY: string;
+  MONITOR_HMAC_SECRET: string;
 }
 
 export { MonitorGateway } from "./do";
+
+const HMAC_WINDOW_S = 300;
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * HMAC check for the main Worker (machine-to-machine).
+ * The caller sends:
+ *   X-Muse-Timestamp: unix seconds
+ *   X-Muse-Signature: hex HMAC-SHA256(MONITOR_HMAC_SECRET, "<ts>.<section>")
+ * Accepted within ±300 s. The secret is shared with the main Worker and
+ * set by the operator on both sides; it never appears in the repo.
+ */
+async function hmacMatches(
+  request: Request,
+  secret: string,
+  section: string,
+): Promise<boolean> {
+  if (!secret) return false;
+  const ts = request.headers.get("X-Muse-Timestamp");
+  const sig = request.headers.get("X-Muse-Signature");
+  if (!ts || !sig) return false;
+  if (!/^[0-9a-fA-F]{64}$/.test(sig)) return false;
+  const tsNum = Number(ts);
+  if (!Number.isFinite(tsNum)) return false;
+  if (Math.abs(Date.now() / 1000 - tsNum) > HMAC_WINDOW_S) return false;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const mac = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`${ts}.${section}`),
+  );
+  const expected = [...new Uint8Array(mac)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return timingSafeEqual(expected, sig.toLowerCase());
+}
 
 function bearerMatches(header: string | null, expected: string): boolean {
   if (!header || !expected) return false;
@@ -117,6 +166,16 @@ export default {
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
       const stub = env.MONITOR_GATEWAY.get(id);
       return stub.fetch("http://do/status");
+    }
+
+    if (url.pathname.startsWith("/api/hmac/monitor/") && request.method === "GET") {
+      const section = url.pathname.slice("/api/hmac/monitor/".length);
+      if (!(await hmacMatches(request, env.MONITOR_HMAC_SECRET, section))) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
+      const stub = env.MONITOR_GATEWAY.get(id);
+      return stub.fetch(`http://do/monitor/${section}`);
     }
 
     if (url.pathname.startsWith("/api/monitor/") && request.method === "GET") {
