@@ -88,6 +88,9 @@ const SECTIONS: Array<[string, string]> = [
   ["status", "状態（tailscaled / Bridge）"],
   ["diag", "診断サマリ（全33項目）"],
   ["sdkhealth", "SDK ヘルス"],
+  ["sdkprofiles", "SDK プロファイル"],
+  ["sdksessions", "SDK セッション"],
+  ["sdkts", "SDK ヘルス（TypeScript）"],
   ["jobs", "ジョブキュー"],
   ["pending", "承認待ち"],
   ["execlog", "実行監査ログ"],
@@ -117,6 +120,7 @@ const DASHBOARD = `<!DOCTYPE html>
 承認はホストのシェルでのみ行えます。</p>
 <p><label>API キー: <input type="password" id="key" size="32"></label>
 <button type="button" onclick="loadAll()">全て取得</button></p>
+<pre id="nodestat">ノード状態: （未取得）</pre>
 <div id="sections"></div>
 <script>
   const SECTIONS = ${JSON.stringify(SECTIONS)};
@@ -140,7 +144,18 @@ const DASHBOARD = `<!DOCTYPE html>
       el.textContent = j.output !== undefined ? j.output : JSON.stringify(j, null, 2);
     } catch (err) { el.textContent = '取得失敗: ' + err; }
   }
-  function loadAll() { for (const [name] of SECTIONS) load(name); }
+  async function loadStatus() {
+    const el = document.getElementById('nodestat');
+    try {
+      const r = await fetch('/api/status', { headers: { Authorization: 'Bearer ' + key() } });
+      const j = await r.json();
+      const rcv = j.receiver || {};
+      el.textContent = 'ノード状態: ' + (j.node ?? JSON.stringify(j)) +
+        ' / 受信側: ' + (rcv.baseName ?? '-') + ' -> ' + (rcv.resolvedIp ?? '未解決') +
+        ' / 候補: ' + ((rcv.candidates || []).map(c => c.name + '(' + c.ip + ')').join(', ') || 'なし');
+    } catch (err) { el.textContent = 'ノード状態: 取得失敗 ' + err; }
+  }
+  function loadAll() { loadStatus(); for (const [name] of SECTIONS) load(name); }
 </script>
 </body></html>`;
 
@@ -160,6 +175,15 @@ export default {
 
     if (url.pathname === "/api/status" && request.method === "GET") {
       if (!bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
+      const stub = env.MONITOR_GATEWAY.get(id);
+      return stub.fetch("http://do/status");
+    }
+
+    if (url.pathname === "/api/hmac/status" && request.method === "GET") {
+      if (!(await hmacMatches(request, env.MONITOR_HMAC_SECRET, "status"))) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");

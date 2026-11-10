@@ -37,7 +37,7 @@ GET /monitor/<section>
 ## section 一覧
 
 status / diag / jobs / pkgs / vm / procs / ports / git / recent /
-pending / execlog / sdkhealth
+pending / execlog / sdkhealth / sdkprofiles / sdksessions / sdkts
 
 各 section はホスト側の読み取り専用スクリプト1本に対応する。
 書き込み・実行系のエンドポイントはモニタ用には存在しない。
