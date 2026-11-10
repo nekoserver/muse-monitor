@@ -24,12 +24,30 @@ import type {
   IPNCallbacks,
   IPNConfig,
 } from "./wasm-ipn";
+import {
+  parsePeers,
+  candidatesFor,
+  PeerResolver,
+  type PeerCandidate,
+} from "./ts-discover";
 
 interface Env {
   TS_AUTHKEY: string;
-  RECEIVER_API_KEY: string;
-  RECEIVER_URL: string;
+  TS_API_KEY: string;
 }
+
+// The receiver is the shared muse-code-wasm receiver on the host node.
+// Only the node's base name is fixed here: its tailnet IP changes when
+// the node re-registers, and its name may gain a numeric suffix
+// (muse-vm-1, muse-vm-2, ...). The concrete peer is therefore resolved
+// at runtime from this node's own netmap, and confirmed by probing the
+// receiver's /health (see resolveReceiver below).
+// This node's own tailnet hostname. Not the Worker name: the Worker
+// name lives only in wrangler.toml's `name` and code cannot read it.
+// The two strings match by choice, not by mechanism.
+const NODE_HOSTNAME = "muse-monitor";
+const RECEIVER_NAME = "muse-vm";
+const RECEIVER_PORT = 8090;
 
 const STATE_KEY = "ts-state";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -48,6 +66,8 @@ export class MonitorGateway extends DurableObject<Env> {
   private flushPending: Promise<void> | null = null;
   private lastStatus = "not-started";
   private lastError: string | null = null;
+  private peers: PeerCandidate[] = [];
+  private resolver = new PeerResolver(RECEIVER_NAME, RECEIVER_PORT);
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -88,7 +108,7 @@ export class MonitorGateway extends DurableObject<Env> {
     void go.run(instance);
     const created = newIPN({
       authKey: this.env.TS_AUTHKEY,
-      hostname: "muse-monitor",
+      hostname: NODE_HOSTNAME,
       ephemeral: false,
       logUpload: false,
       stateStorage: {
@@ -110,7 +130,9 @@ export class MonitorGateway extends DurableObject<Env> {
         this.lastStatus = state;
         if (state === "Running") this.readyResolve?.();
       },
-      notifyNetMap: () => undefined,
+      notifyNetMap: (netMap: string) => {
+        this.peers = parsePeers(netMap);
+      },
       notifyBrowseToURL: () => undefined,
       notifyPanicRecover: (error: string) => {
         this.lastError = error;
@@ -141,6 +163,11 @@ export class MonitorGateway extends DurableObject<Env> {
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
+  /** Resolve (or re-resolve) the receiver's current tailnet IP. */
+  private async resolveReceiver(ipn: IPN, force: boolean): Promise<string | null> {
+    return this.resolver.resolve((req) => ipn.fetch(req), this.peers, force);
+  }
+
   /** GET one monitor section from the receiver through the tailnet. */
   async monitor(section: string): Promise<Response> {
     let ipn: IPN;
@@ -152,19 +179,34 @@ export class MonitorGateway extends DurableObject<Env> {
         { status: 502 },
       );
     }
-    const url = `${this.env.RECEIVER_URL.replace(/\/$/, "")}/monitor/${section}`;
-    let resp;
-    try {
-      resp = await ipn.fetch({
-        url,
-        method: "GET",
-        headers: [["Authorization", `Bearer ${this.env.RECEIVER_API_KEY}`]],
-      });
-    } catch (err) {
+    let ip = await this.resolveReceiver(ipn, false);
+    if (!ip) {
       return Response.json(
-        { error: "delivery_unknown", message: `tailnet GET failed: ${String(err)}` },
+        { error: "receiver_not_found", message: `no reachable peer named ${RECEIVER_NAME}(-*)` },
         { status: 502 },
       );
+    }
+    let resp;
+    try {
+      resp = await this.fetchSection(ipn, ip, section);
+    } catch {
+      // Transport failed against the cached peer: re-resolve once.
+      this.resolver.invalidate();
+      ip = await this.resolveReceiver(ipn, true);
+      if (!ip) {
+        return Response.json(
+          { error: "receiver_not_found", message: `no reachable peer named ${RECEIVER_NAME}(-*)` },
+          { status: 502 },
+        );
+      }
+      try {
+        resp = await this.fetchSection(ipn, ip, section);
+      } catch (err) {
+        return Response.json(
+          { error: "delivery_unknown", message: `tailnet GET failed: ${String(err)}` },
+          { status: 502 },
+        );
+      }
     }
     const chunks: Uint8Array[] = [];
     let total = 0;
@@ -201,6 +243,15 @@ export class MonitorGateway extends DurableObject<Env> {
     });
   }
 
+  /** One GET against the receiver on a resolved peer IP. */
+  private async fetchSection(ipn: IPN, ip: string, section: string) {
+    return ipn.fetch({
+      url: `http://${ip}:${RECEIVER_PORT}/monitor/${section}`,
+      method: "GET",
+      headers: [["Authorization", `Bearer ${this.env.TS_API_KEY}`]],
+    });
+  }
+
   /** Node status for diagnostics (no secrets). */
   async status(): Promise<Response> {
     if (!this.ipn) {
@@ -222,7 +273,13 @@ export class MonitorGateway extends DurableObject<Env> {
     return Response.json({
       node: this.lastStatus,
       lastError: this.lastError,
+      receiver: {
+        baseName: RECEIVER_NAME,
+        resolvedIp: this.resolver.cachedIp,
+        candidates: candidatesFor(this.peers, RECEIVER_NAME),
+      },
       tailscale: parsed,
     });
   }
 }
+

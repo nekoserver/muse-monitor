@@ -52,6 +52,12 @@ Durable Object (MonitorGateway)
 | `GET /health`           | 不要          | Worker 自身の死活        |
 | `GET /api/status`       | WORKER_API_KEY | WASM ノードの状態       |
 | `GET /api/monitor/<s>`  | WORKER_API_KEY | section のデータを返す  |
+| `GET /api/hmac/monitor/<s>` | HMAC 署名  | 本体 Worker 専用。署名が無い・不正・時刻が ±300 秒を超えるものは全て拒否する |
+
+HMAC の形式（本体 Worker からの呼び出し用）:
+
+- ヘッダ `X-Muse-Timestamp`: unix 秒
+- ヘッダ `X-Muse-Signature`: `HMAC-SHA256(MONITOR_HMAC_SECRET, "<timestamp>.<section>")` の hex
 
 ダッシュボード画面では API キーを入力して取得します
 （キーはブラウザの外に送信されません）。
@@ -64,18 +70,23 @@ Durable Object (MonitorGateway)
 | 名前              | 用途                                   |
 |-------------------|----------------------------------------|
 | `TS_AUTHKEY`      | WASM ノードの Tailscale ログイン       |
-| `RECEIVER_API_KEY`| 受信 API への Bearer 認証              |
+| `TS_API_KEY`| 受信 API への Bearer 認証              |
 | `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
+| `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
 
-受信 API のアドレスは `wrangler.toml` の `RECEIVER_URL` で指定します。
+受信 API の相手は、基名 `muse-vm` だけを `src/do.ts` に持ちます。
+IP はノードの再登録で変わり、名前には数字の接尾辞が付くことがあるため、
+実アドレスは WASM ノードの netmap から候補を挙げ、受信側の `/health`
+への到達で判定して決めます（失敗時は再探索）。
 
 ## デプロイ
 
 ```sh
 npm install
 npx wrangler secret put TS_AUTHKEY
-npx wrangler secret put RECEIVER_API_KEY
+npx wrangler secret put TS_API_KEY
 npx wrangler secret put WORKER_API_KEY
+npx wrangler secret put MONITOR_HMAC_SECRET
 npx wrangler deploy
 ```
 
