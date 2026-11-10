@@ -34,6 +34,9 @@ Durable Object (MonitorGateway)
 | status    | デーモンの状態           |
 | diag      | システム診断サマリ       |
 | sdkhealth | SDK ヘルスチェック       |
+| sdkprofiles | SDK プロファイル一覧   |
+| sdksessions | SDK セッション一覧     |
+| sdkts     | SDK ヘルス（TypeScript） |
 | jobs      | ジョブキュー             |
 | pending   | 承認待ちリクエスト       |
 | execlog   | 実行監査ログ             |
@@ -53,6 +56,7 @@ Durable Object (MonitorGateway)
 | `GET /api/status`       | WORKER_API_KEY | WASM ノードの状態       |
 | `GET /api/monitor/<s>`  | WORKER_API_KEY | section のデータを返す  |
 | `GET /api/hmac/monitor/<s>` | HMAC 署名  | 本体 Worker 専用。署名が無い・不正・時刻が ±300 秒を超えるものは全て拒否する |
+| `GET /api/hmac/status`  | HMAC 署名      | 本体 Worker 専用。ノード状態（署名対象は `status`） |
 
 HMAC の形式（本体 Worker からの呼び出し用）:
 

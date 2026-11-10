@@ -54,6 +54,7 @@ const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const SECTIONS = new Set([
   "status", "diag", "jobs", "pkgs", "vm", "procs",
   "ports", "git", "recent", "pending", "execlog", "sdkhealth",
+  "sdkprofiles", "sdksessions", "sdkts",
 ]);
 
 export class MonitorGateway extends DurableObject<Env> {
