@@ -19,7 +19,8 @@ new_sqlite_classes = ["MonitorGateway"]
 #                      when both are unset does the node use interactive
 #                      login (approve the loginUrl shown by /api/status).
 #   TS_API_KEY - Bearer key for the receiver API (same value the
-#                      receiver expects as MUSE_CODE_WASM_API_KEY)
+#                      receiver expects as MUSE_CODE_WASM_API_KEY).
+#                      If unset, TS_AUTHKEY is sent instead.
 #   WORKER_API_KEY   - Bearer key callers must present to /api/*
 #   MONITOR_HMAC_SECRET - shared secret for the main Worker's HMAC-signed
 #                      calls to /api/hmac/* (set the same value there)

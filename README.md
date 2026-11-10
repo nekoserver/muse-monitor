@@ -74,7 +74,7 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 | 名前              | 用途                                   |
 |-------------------|----------------------------------------|
 | `TS_AUTHKEY`      | （任意）WASM ノードの Tailscale ログイン。未設定の場合は `TS_API_KEY` を認証キーとして使う。両方とも未設定のときだけ対話ログイン（`/api/status` の `loginUrl` を開いて承認）になる |
-| `TS_API_KEY`| 受信 API への Bearer 認証              |
+| `TS_API_KEY`| 受信 API への Bearer 認証。未設定なら `TS_AUTHKEY` を使う |
 | `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
 
@@ -89,12 +89,14 @@ IP はノードの再登録で変わり、名前には数字の接尾辞が付�
 | 名前 | 置き場所 | 何の鍵か | 値 |
 |------|----------|----------|----|
 | `TS_AUTHKEY` | muse-monitor のシークレット（任意） | WASM ノードが tailnet に参加するための認証キー | Tailscale 管理画面で発行。未設定なら `TS_API_KEY` を使う |
-| `TS_API_KEY` | muse-monitor のシークレット | Worker が受信側を呼ぶ際の Bearer | 任意の文字列。受信側の起動時に決める値と揃える |
+| `TS_API_KEY` | muse-monitor のシークレット | Worker が受信側を呼ぶ際の Bearer | 受信側の起動時に決める値と揃える。未設定なら `TS_AUTHKEY` を使う（1つの鍵で両方を賄える） |
 | `WORKER_API_KEY` | muse-monitor のシークレット | ダッシュボードの `/api/*` を呼ぶ際の Bearer | 任意の文字列 |
 | `MONITOR_HMAC_SECRET` | muse-monitor と本体 Worker の両方 | 本体 Worker からの HMAC 署名の共有鍵 | 両方に同じ任意の文字列 |
 | `MUSE_CODE_WASM_API_KEY` | 受信側の起動時の環境変数 | 受信側（:8090）が受ける Bearer の正 | 任意の文字列（`TS_API_KEY` と揃える）。名前は受信側を作った muse-code-wasm 由来 |
 
 現時点では受信側は未起動で、キーはどれも未決定です。この表は設定時の対応表です。
+
+どの鍵がノードに渡ったかは `/api/status` の `authKeySource`（`TS_AUTHKEY` / `TS_API_KEY` / `null`）で確かめられます（値は出しません）。受信側が 401 を返したときは `receiver_unauthorized`、503 のときは `receiver_key_not_configured` として、どの鍵を送ったか（`keySource`）と合わせて返します。
 
 ## デプロイ
 
