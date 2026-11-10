@@ -1,1 +1,48 @@
-IyDlj5fkv6EgQVBJIOOBruWlkee0hO+8iC9tb25pdG9y77yJCgrjgZPjga4gV29ya2VyIOOBjOS+neWtmOOBmeOCi+ODm+OCueODiOWBtOOBruWPl+S/oSBBUEkg44Gu44GG44Gh44CB44Oi44OL44K/55So44GuCuiqreOBv+WPluOCiuWwgueUqOOCqOODs+ODieODneOCpOODs+ODiOOBruWlkee0hOOCkuOBk+OBk+OBq+WbuuWumuOBmeOCi+OAggoKIyMg44Ko44Oz44OJ44Od44Kk44Oz44OICgpgYGAKR0VUIC9tb25pdG9yLzxzZWN0aW9uPgpgYGAKCi0g6YWN572uOiDjg5vjgrnjg4jvvIh0YWlsbmV0IOWGheOAgeODneODvOODiCA4MDkw77yJ44CC5YWs6ZaL44Kk44Oz44K/44O844ON44OD44OI44GL44KJ44GvCiAg5Yiw6YGU44GX44Gq44GE44CC44GT44GuIFdvcmtlciDjga8gRHVyYWJsZSBPYmplY3Qg5YaF44GuIFRhaWxzY2FsZSBXQVNNCiAg44OO44O844OJ57WM55Sx44Gn44Gu44G/44Ki44Kv44K744K544GZ44KLCi0g6KqN6Ki8OiBgQXV0aG9yaXphdGlvbjogQmVhcmVyIDxSRUNFSVZFUl9BUElfS0VZPmAg5b+F6aCI44CCCiAg5pyq6Kit5a6a44O75LiN5LiA6Ie044GvIDQwMeOAgeWPl+S/oeWBtOOBq+mNteOBjOacquioreWumuOBquOCiSA1MDMKCiMjIOODrOOCueODneODs+OCuQoKYGBganNvbgp7CiAgInNlY3Rpb24iOiAic3RhdHVzIiwKICAicmMiOiAwLAogICJvdXRwdXQiOiAi4oCm44K544Kv44Oq44OX44OI44Gu5qiZ5rqW5Ye65Yqb77yI77yL5qiZ5rqW44Ko44Op44O877yJ4oCmIiwKICAidHJ1bmNhdGVkIjogZmFsc2UsCiAgInRzIjogIjIwMjYtMTEtMTFUMDU6MzA6MDArMDkwMCIKfQpgYGAKCi0gYG91dHB1dGAg44Gu5LiK6ZmQ44GvIDY0IEtpQuOAgui2heOBiOOBn+WgtOWQiOOBr+WIh+OCiuaNqOOBpuOBpiBgdHJ1bmNhdGVkOiB0cnVlYAotIOacquefpeOBriBzZWN0aW9uIOOBryA0MDQKLSDjgrnjgq/jg6rjg5fjg4jjga7lrp/ooYzjgYzjgr/jgqTjg6DjgqLjgqbjg4jvvIg2MCDnp5LvvInjgZfjgZ/loLTlkIjjga8gNTA0CgojIyBzZWN0aW9uIOS4gOimpwoKc3RhdHVzIC8gZGlhZyAvIGpvYnMgLyBwa2dzIC8gdm0gLyBwcm9jcyAvIHBvcnRzIC8gZ2l0IC8gcmVjZW50IC8KcGVuZGluZyAvIGV4ZWNsb2cgLyBzZGtoZWFsdGgKCuWQhCBzZWN0aW9uIOOBr+ODm+OCueODiOWBtOOBruiqreOBv+WPluOCiuWwgueUqOOCueOCr+ODquODl+ODiDHmnKzjgavlr77lv5zjgZnjgovjgIIK5pu444GN6L6844G/44O75a6f6KGM57O744Gu44Ko44Oz44OJ44Od44Kk44Oz44OI44Gv44Oi44OL44K/55So44Gr44Gv5a2Y5Zyo44GX44Gq44GE44CCCgojIyDlpInmm7TmmYLjga7ms6jmhI8KCi0gc2VjdGlvbiDjga7ov73liqDjg7vliYrpmaTjga/jgIHjgZPjga7mlofmm7jjgaggV29ya2VyIOWBtAogIO+8iGBzcmMvaW5kZXgudHNgIOOBruihqOekuumgheebruOAgWBzcmMvZG8udHNgIOOBruioseWPr+ODquOCueODiO+8ieOCkgogIOWQjOaZguOBq+WkieabtOOBmeOCi+OBk+OBqAotIOiqjeiovOaWueW8j+OCkuWkieOBiOOCi+WgtOWQiOOBr+OAgeWPl+S/oeWBtOOBqCBXb3JrZXIg44Gu44K344O844Kv44Os44OD44OICiAg77yIYFJFQ0VJVkVSX0FQSV9LRVlg77yJ44KS5ZCI44KP44Gb44Gm5aSJ5pu044GZ44KL44GT44GoCg==
+# 受信 API の契約（/monitor）
+
+この Worker が依存するホスト側の受信 API のうち、モニタ用の
+読み取り専用エンドポイントの契約をここに固定する。
+
+## エンドポイント
+
+```
+GET /monitor/<section>
+```
+
+- 配置: ホスト（tailnet 内、ポート 8090）。公開インターネットからは
+  到達しない。この Worker は Durable Object 内の Tailscale WASM
+  ノード経由でのみアクセスする
+- 認証: `Authorization: Bearer <RECEIVER_API_KEY>` 必須。
+  未設定・不一致は 401、受信側に鍵が未設定なら 503
+
+## レスポンス
+
+```json
+{
+  "section": "status",
+  "rc": 0,
+  "output": "…スクリプトの標準出力（＋標準エラー）…",
+  "truncated": false,
+  "ts": "2026-11-11T05:30:00+0900"
+}
+```
+
+- `output` の上限は 64 KiB。超えた場合は切り捨てて `truncated: true`
+- 未知の section は 404
+- スクリプトの実行がタイムアウト（60 秒）した場合は 504
+
+## section 一覧
+
+status / diag / jobs / pkgs / vm / procs / ports / git / recent /
+pending / execlog / sdkhealth
+
+各 section はホスト側の読み取り専用スクリプト1本に対応する。
+書き込み・実行系のエンドポイントはモニタ用には存在しない。
+
+## 変更時の注意
+
+- section の追加・削除は、この文書と Worker 側
+  （`src/index.ts` の表示項目、`src/do.ts` の許可リスト）を
+  同時に変更すること
+- 認証方式を変える場合は、受信側と Worker のシークレット
+  （`RECEIVER_API_KEY`）を合わせて変更すること
