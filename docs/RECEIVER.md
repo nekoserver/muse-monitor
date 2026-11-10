@@ -12,7 +12,7 @@ GET /monitor/<section>
 - 配置: ホスト（tailnet 内、ポート 8090）。公開インターネットからは
   到達しない。この Worker は Durable Object 内の Tailscale WASM
   ノード経由でのみアクセスする
-- 認証: `Authorization: Bearer <RECEIVER_API_KEY>` 必須。
+- 認証: `Authorization: Bearer <TS_API_KEY>` 必須。
   未設定・不一致は 401、受信側に鍵が未設定なら 503
 
 ## レスポンス
@@ -45,4 +45,4 @@ pending / execlog / sdkhealth
   （`src/index.ts` の表示項目、`src/do.ts` の許可リスト）を
   同時に変更すること
 - 認証方式を変える場合は、受信側と Worker のシークレット
-  （`RECEIVER_API_KEY`）を合わせて変更すること
+  （`TS_API_KEY`）を合わせて変更すること

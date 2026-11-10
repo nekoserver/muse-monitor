@@ -12,15 +12,15 @@
  *
  * Auth (keys are separate and never mixed):
  *   - callers present WORKER_API_KEY (Bearer) to /api/*
- *   - the DO presents RECEIVER_API_KEY to the receiver
+ *   - the DO presents TS_API_KEY to the receiver
  *   - the WASM node logs in with TS_AUTHKEY
  */
 
 interface Env {
   MONITOR_GATEWAY: DurableObjectNamespace;
   WORKER_API_KEY: string;
-  RECEIVER_API_KEY: string;
-  RECEIVER_URL: string;
+  TS_API_KEY: string;
+  TS_HOST_URL: string;
   TS_AUTHKEY: string;
   MONITOR_HMAC_SECRET: string;
 }

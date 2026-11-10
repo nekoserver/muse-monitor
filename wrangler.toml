@@ -7,7 +7,7 @@ compatibility_date = "2026-11-10"
 # internet. Same receiver as muse-code-wasm; this Worker only uses its
 # read-only GET /monitor/<section> endpoints.
 [vars]
-RECEIVER_URL = "http://100.86.29.77:8090"
+TS_HOST_URL = "http://100.86.29.77:8090"
 
 [durable_objects]
 bindings = [
@@ -20,7 +20,7 @@ new_sqlite_classes = ["MonitorGateway"]
 
 # Secrets (set by the operator; never committed):
 #   TS_AUTHKEY       - Tailscale auth key for the WASM node (one login only)
-#   RECEIVER_API_KEY - Bearer key for the receiver API (same value the
+#   TS_API_KEY - Bearer key for the receiver API (same value the
 #                      receiver expects as MUSE_CODE_WASM_API_KEY)
 #   WORKER_API_KEY   - Bearer key callers must present to /api/*
 #   MONITOR_HMAC_SECRET - shared secret for the main Worker's HMAC-signed

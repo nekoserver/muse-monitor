@@ -70,18 +70,18 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 | 名前              | 用途                                   |
 |-------------------|----------------------------------------|
 | `TS_AUTHKEY`      | WASM ノードの Tailscale ログイン       |
-| `RECEIVER_API_KEY`| 受信 API への Bearer 認証              |
+| `TS_API_KEY`| 受信 API への Bearer 認証              |
 | `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
 
-受信 API のアドレスは `wrangler.toml` の `RECEIVER_URL` で指定します。
+受信 API のアドレスは `wrangler.toml` の `TS_HOST_URL` で指定します。
 
 ## デプロイ
 
 ```sh
 npm install
 npx wrangler secret put TS_AUTHKEY
-npx wrangler secret put RECEIVER_API_KEY
+npx wrangler secret put TS_API_KEY
 npx wrangler secret put WORKER_API_KEY
 npx wrangler secret put MONITOR_HMAC_SECRET
 npx wrangler deploy

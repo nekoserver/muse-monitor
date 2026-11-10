@@ -27,8 +27,8 @@ import type {
 
 interface Env {
   TS_AUTHKEY: string;
-  RECEIVER_API_KEY: string;
-  RECEIVER_URL: string;
+  TS_API_KEY: string;
+  TS_HOST_URL: string;
 }
 
 const STATE_KEY = "ts-state";
@@ -152,13 +152,13 @@ export class MonitorGateway extends DurableObject<Env> {
         { status: 502 },
       );
     }
-    const url = `${this.env.RECEIVER_URL.replace(/\/$/, "")}/monitor/${section}`;
+    const url = `${this.env.TS_HOST_URL.replace(/\/$/, "")}/monitor/${section}`;
     let resp;
     try {
       resp = await ipn.fetch({
         url,
         method: "GET",
-        headers: [["Authorization", `Bearer ${this.env.RECEIVER_API_KEY}`]],
+        headers: [["Authorization", `Bearer ${this.env.TS_API_KEY}`]],
       });
     } catch (err) {
       return Response.json(
