@@ -25,7 +25,16 @@ interface Env {
   TS_API_KEY?: string;
   TS_AUTHKEY?: string;
   MONITOR_HMAC_SECRET: string;
+  /** wrangler.toml の [version_metadata]。デプロイした版のIDと時刻。 */
+  CF_VERSION_METADATA?: { id: string; tag: string; timestamp: string };
 }
+
+/**
+ * コードの版の目印(/health で返す)。どの修正が本番に入っているかを、鍵なしで見分けるため。
+ * 2: netmapの読み違いの修正・鍵のフォールバック(nekoserver/muse-monitor#7)。3: /health にノードの公開状態を出す。
+ * 動きが変わる修正を入れたら上げる。
+ */
+const MONITOR_REVISION = 3;
 
 export { MonitorGateway } from "./do";
 
@@ -221,7 +230,22 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/health" && request.method === "GET") {
-      return Response.json({ status: "ok", worker: "muse-monitor" });
+      // 鍵なしで、どの版が動いていてノードがどういう状態かを確かめられるようにする(秘密は含めない)。
+      let node: unknown;
+      try {
+        const stub = env.MONITOR_GATEWAY.get(env.MONITOR_GATEWAY.idFromName("monitor-gateway"));
+        node = await (await stub.fetch("http://do/public-status")).json();
+      } catch (err) {
+        node = { error: `node status unavailable: ${String(err).slice(0, 200)}` };
+      }
+      const meta = env.CF_VERSION_METADATA;
+      return Response.json({
+        status: "ok",
+        worker: "muse-monitor",
+        revision: MONITOR_REVISION,
+        version: meta ? { id: meta.id, tag: meta.tag, timestamp: meta.timestamp } : null,
+        node,
+      });
     }
 
     if (url.pathname === "/" && request.method === "GET") {

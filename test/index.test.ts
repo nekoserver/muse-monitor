@@ -39,11 +39,31 @@ const sign = (section: string, ts = Math.floor(Date.now() / 1000), secret = MONI
 afterEach(() => { vi.useRealTimers(); });
 
 describe("open routes", () => {
-  it("GET /health answers without the DO", async () => {
+  it("GET /health needs no key and shows the code revision, the deployed version and the node's public state", async () => {
     const { env, calls } = makeEnv();
+    const publicState = { node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true };
+    (env as Record<string, unknown>).MONITOR_GATEWAY = {
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async (url: string) => { calls.push(url); return Response.json(publicState); } }),
+    };
+    (env as Record<string, unknown>).CF_VERSION_METADATA = { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" };
     const res = await worker.fetch(call("/health"), env);
-    expect(await res.json()).toEqual({ status: "ok", worker: "muse-monitor" });
-    expect(calls).toEqual([]);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: "ok", worker: "muse-monitor", revision: 3,
+      version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
+      node: publicState,
+    });
+    expect(calls).toEqual(["http://do/public-status"]);
+  });
+
+  it("GET /health still answers 200 when the DO fails or version metadata is missing", async () => {
+    const { env } = makeEnv();
+    (env as Record<string, unknown>).MONITOR_GATEWAY = { idFromName: (n: string) => n, get: () => ({ fetch: async () => { throw new Error("do down"); } }) };
+    const res = await worker.fetch(call("/health"), env);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 3, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {

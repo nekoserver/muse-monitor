@@ -305,6 +305,40 @@ describe("node start failures", () => {
   });
 });
 
+describe("GET /public-status (for /health, no secrets)", () => {
+  it("starts the node in the background, so the state can be checked without a key", async () => {
+    const gw = gateway({ TS_API_KEY: "k" });
+    const first = await (await get(gw, "/public-status")).json();
+    expect(first).toMatchObject({ authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY", loginPending: false });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(nodes).toHaveLength(1);
+    expect(await (await get(gw, "/public-status")).json()).toMatchObject({ node: "Running", receiverCandidates: 1 });
+    expect(nodes).toHaveLength(1);
+  });
+
+  it("after start: Running and whether muse-vm was found, never the IP, login URL or key values", async () => {
+    const gw = gateway();
+    await get(gw, "/monitor/jobs");
+    const text = await (await get(gw, "/public-status")).text();
+    expect(JSON.parse(text)).toEqual({
+      node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
+    });
+    for (const secret of ["100.86.29.77", "tskey-auth-secret", "ts-api-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
+  });
+
+  it("says a login is pending without showing the URL", async () => {
+    vi.useFakeTimers();
+    onLogin = (node) => queueMicrotask(() => { node.callbacks!.notifyState("NeedsLogin"); node.callbacks!.notifyBrowseToURL("https://login.tailscale.com/a/xyz"); });
+    const gw = gateway({ TS_API_KEY: "expired" });
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+    const text = await (await get(gw, "/public-status")).text();
+    expect(JSON.parse(text)).toMatchObject({ node: "NeedsLogin", loginPending: true, receiverCandidates: 0 });
+    expect(text).not.toContain("login.tailscale.com");
+  });
+});
+
 describe("GET /status", () => {
   it("before any request: not-started, without starting the node", async () => {
     const gw = gateway();

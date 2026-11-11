@@ -235,6 +235,7 @@ export class MonitorGateway extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/status") return this.status();
+    if (url.pathname === "/public-status") return this.publicStatus();
     if (url.pathname.startsWith("/monitor/")) {
       const section = url.pathname.slice("/monitor/".length);
       if (!SECTIONS.has(section)) {
@@ -369,6 +370,23 @@ export class MonitorGateway extends DurableObject<Env> {
   }
 
   /** Node status for diagnostics (no secrets). */
+  /**
+   * /health 用(鍵なしで見える)。秘密を含まない: ログインURL・IPアドレス・鍵の値は出さない。
+   * ログインURLが漏れると、他人がこのノードを自分のtailnetに取り込める恐れがあるため。
+   */
+  async publicStatus(): Promise<Response> {
+    // 鍵なしでも状態を確かめられるよう、ノードが無ければ起動を始める(待たない。起動は1回にまとめられる)。
+    if (!this.ipn) this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+    return Response.json({
+      node: this.ipn ? this.lastStatus : "not-started",
+      authKeySource: this.authKeySource(),
+      receiverKeySource: this.receiverKey()?.source ?? null,
+      loginPending: this.lastStatus !== "Running" && Boolean(this.browseUrl),
+      receiverCandidates: candidatesFor(this.peers, RECEIVER_NAME).length,
+      receiverResolved: Boolean(this.resolver.cachedIp),
+    });
+  }
+
   async status(): Promise<Response> {
     if (!this.ipn) {
       return Response.json({

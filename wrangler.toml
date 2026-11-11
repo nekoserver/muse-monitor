@@ -9,6 +9,10 @@ bindings = [
   { name = "MONITOR_GATEWAY", class_name = "MonitorGateway" }
 ]
 
+# /health でデプロイした版(ID・時刻)を返すため。
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MonitorGateway"]
