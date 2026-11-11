@@ -134,3 +134,34 @@ describe("parsePeers with the netmap shape the bundled WASM emits", () => {
     expect(candidatesFor(peers, "muse-vm")).toEqual([{ name: "muse-vm", ip: "100.86.29.77" }]);
   });
 });
+
+describe("PeerResolver records why each candidate failed (for /health, without IPs)", () => {
+  const peers = [
+    { name: "muse-vm", ip: "100.0.0.1" },
+    { name: "muse-vm-1", ip: "100.0.0.2" },
+    { name: "muse-vm-2", ip: "100.0.0.3" },
+  ];
+  it("keeps the outcome per candidate: HTTP status, error (IPs masked) or timeout", async () => {
+    vi.useFakeTimers();
+    const resolver = new PeerResolver("muse-vm", 8090, "/health", 5000);
+    const fetch: ProbeFetch = async ({ url }) => {
+      if (url.includes("100.0.0.1")) return { status: 404, cancel() {} };
+      if (url.includes("100.0.0.2")) throw new Error("dial tcp 100.0.0.2:8090: connection refused");
+      return new Promise(() => {});
+    };
+    const pending = resolver.resolve(fetch, peers);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await pending).toBeNull();
+    expect(resolver.lastProbes).toEqual([
+      { name: "muse-vm", result: "HTTP 404" },
+      { name: "muse-vm-1", result: "error: dial tcp x.x.x.x:8090: connection refused" },
+      { name: "muse-vm-2", result: "timeout (5000ms)" },
+    ]);
+    vi.useRealTimers();
+  });
+  it("records ok for the candidate that answered", async () => {
+    const resolver = new PeerResolver("muse-vm", 8090);
+    await resolver.resolve(async () => ({ status: 200, cancel() {} }), peers);
+    expect(resolver.lastProbes).toEqual([{ name: "muse-vm", result: "ok" }]);
+  });
+});
