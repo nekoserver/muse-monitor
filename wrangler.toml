@@ -13,6 +13,10 @@ bindings = [
 [version_metadata]
 binding = "CF_VERSION_METADATA"
 
+# Workers Builds のブランチのビルドは `npx wrangler preview` を実行する。previews の設定が無いとそこで失敗する。
+[previews.version_metadata]
+binding = "CF_VERSION_METADATA"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MonitorGateway"]
