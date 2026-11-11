@@ -99,16 +99,6 @@ export class MonitorGateway extends DurableObject<Env> {
     return null;
   }
 
-  /**
-   * The Bearer presented to the receiver: TS_API_KEY, or TS_AUTHKEY when
-   * TS_API_KEY is not set (the operator keeps one key for both).
-   */
-  private receiverKey(): { value: string; source: "TS_API_KEY" | "TS_AUTHKEY" } | null {
-    if (this.env.TS_API_KEY) return { value: this.env.TS_API_KEY, source: "TS_API_KEY" };
-    if (this.env.TS_AUTHKEY) return { value: this.env.TS_AUTHKEY, source: "TS_AUTHKEY" };
-    return null;
-  }
-
   private async loadState(): Promise<void> {
     if (this.stateLoaded) return;
     const stored = await this.ctx.storage.get<Record<string, string>>(STATE_KEY);
@@ -254,16 +244,6 @@ export class MonitorGateway extends DurableObject<Env> {
 
   /** GET one monitor section from the receiver through the tailnet. */
   async monitor(section: string): Promise<Response> {
-    const key = this.receiverKey();
-    if (!key) {
-      return Response.json(
-        {
-          error: "receiver_key_missing",
-          message: "neither TS_API_KEY nor TS_AUTHKEY is set; set the key the receiver expects (MUSE_CODE_WASM_API_KEY) with wrangler secret put TS_API_KEY",
-        },
-        { status: 500 },
-      );
-    }
     let ipn: IPN;
     try {
       ipn = await this.ensureNode();
@@ -282,7 +262,7 @@ export class MonitorGateway extends DurableObject<Env> {
     }
     let resp;
     try {
-      resp = await this.fetchSection(ipn, ip, section, key.value);
+      resp = await this.fetchSection(ipn, ip, section);
     } catch {
       // Transport failed against the cached peer: re-resolve once.
       this.resolver.invalidate();
@@ -294,7 +274,7 @@ export class MonitorGateway extends DurableObject<Env> {
         );
       }
       try {
-        resp = await this.fetchSection(ipn, ip, section, key.value);
+        resp = await this.fetchSection(ipn, ip, section);
       } catch (err) {
         return Response.json(
           { error: "delivery_unknown", message: `tailnet GET failed: ${String(err)}` },
@@ -331,30 +311,6 @@ export class MonitorGateway extends DurableObject<Env> {
       offset += c.length;
     }
     const text = new TextDecoder().decode(merged);
-    if (resp.status === 401 || resp.status === 503) {
-      let receiver: unknown = text;
-      try {
-        receiver = JSON.parse(text);
-      } catch {
-        // keep the raw text
-      }
-      return Response.json(
-        resp.status === 401
-          ? {
-              error: "receiver_unauthorized",
-              message: `the receiver on ${RECEIVER_NAME} rejected the Bearer from ${key.source}; it must equal the receiver's MUSE_CODE_WASM_API_KEY`,
-              keySource: key.source,
-              receiver,
-            }
-          : {
-              error: "receiver_key_not_configured",
-              message: `the receiver on ${RECEIVER_NAME} has no key configured; start it with MUSE_CODE_WASM_API_KEY set to the same value as ${key.source}`,
-              keySource: key.source,
-              receiver,
-            },
-        { status: resp.status },
-      );
-    }
     return new Response(text, {
       status: resp.status,
       headers: { "Content-Type": "application/json" },
@@ -362,11 +318,10 @@ export class MonitorGateway extends DurableObject<Env> {
   }
 
   /** One GET against the receiver on a resolved peer IP. */
-  private async fetchSection(ipn: IPN, ip: string, section: string, bearer: string) {
+  private async fetchSection(ipn: IPN, ip: string, section: string) {
     return ipn.fetch({
       url: `http://${ip}:${RECEIVER_PORT}/monitor/${section}`,
       method: "GET",
-      headers: [["Authorization", `Bearer ${bearer}`]],
     });
   }
 
@@ -387,7 +342,6 @@ export class MonitorGateway extends DurableObject<Env> {
     return Response.json({
       node: this.ipn ? this.lastStatus : "not-started",
       authKeySource: this.authKeySource(),
-      receiverKeySource: this.receiverKey()?.source ?? null,
       loginPending: this.lastStatus !== "Running" && Boolean(this.browseUrl),
       receiverCandidates: candidatesFor(this.peers, RECEIVER_NAME).length,
       receiverResolved: Boolean(this.resolver.cachedIp),

@@ -66,7 +66,6 @@ Durable Object (MonitorGateway)
 | `version` | `[version_metadata]` の版のID・タグ・デプロイ時刻。無ければ `null` |
 | `node.node` | ノードの状態(`not-started`・`NeedsLogin`・`Running` など) |
 | `node.authKeySource` | ノードの参加に使う鍵のシークレット名(`TS_AUTHKEY` / `TS_API_KEY` / `null`) |
-| `node.receiverKeySource` | 受信側へ送る鍵のシークレット名 |
 | `node.loginPending` | 対話ログインの承認待ちか(URLは `/api/status` で鍵を付けて見る) |
 | `node.receiverCandidates` | netmap に見えている muse-vm(-N) の数。0 なら muse-vm がピアに見えていない |
 | `node.receiverResolved` | `/health` への到達で受信側の IP を決められたか |
@@ -87,7 +86,7 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 | 名前              | 用途                                   |
 |-------------------|----------------------------------------|
 | `TS_AUTHKEY`      | （任意）WASM ノードの Tailscale ログイン。未設定の場合は `TS_API_KEY` を認証キーとして使う。両方とも未設定のときだけ対話ログイン（`/api/status` の `loginUrl` を開いて承認）になる |
-| `TS_API_KEY`| 受信 API への Bearer 認証。未設定なら `TS_AUTHKEY` を使う |
+| `TS_API_KEY`| （任意）`TS_AUTHKEY` が未設定のときの Tailscale 認証キー。受信側へは何も送らない（鍵の照合なし） |
 | `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
 
@@ -102,21 +101,20 @@ IP はノードの再登録で変わり、名前には数字の接尾辞が付�
 | 名前 | 置き場所 | 何の鍵か | 値 |
 |------|----------|----------|----|
 | `TS_AUTHKEY` | muse-monitor のシークレット（任意） | WASM ノードが tailnet に参加するための認証キー | Tailscale 管理画面で発行。未設定なら `TS_API_KEY` を使う |
-| `TS_API_KEY` | muse-monitor のシークレット | Worker が受信側を呼ぶ際の Bearer | 受信側の起動時に決める値と揃える。未設定なら `TS_AUTHKEY` を使う（1つの鍵で両方を賄える） |
+| `TS_API_KEY` | muse-monitor のシークレット（任意） | `TS_AUTHKEY` が未設定のときの参加用の認証キー | Tailscale 管理画面で発行 |
 | `WORKER_API_KEY` | muse-monitor のシークレット | ダッシュボードの `/api/*` を呼ぶ際の Bearer | 任意の文字列 |
 | `MONITOR_HMAC_SECRET` | muse-monitor と本体 Worker の両方 | 本体 Worker からの HMAC 署名の共有鍵 | 両方に同じ任意の文字列 |
-| `MUSE_CODE_WASM_API_KEY` | 受信側の起動時の環境変数 | 受信側（:8090）が受ける Bearer の正 | 任意の文字列（`TS_API_KEY` と揃える）。名前は受信側を作った muse-code-wasm 由来 |
 
 現時点では受信側は未起動で、キーはどれも未決定です。この表は設定時の対応表です。
 
-どの鍵がノードに渡ったかは `/api/status` の `authKeySource`（`TS_AUTHKEY` / `TS_API_KEY` / `null`）で確かめられます（値は出しません）。受信側が 401 を返したときは `receiver_unauthorized`、503 のときは `receiver_key_not_configured` として、どの鍵を送ったか（`keySource`）と合わせて返します。
+どの鍵がノードに渡ったかは `/api/status` の `authKeySource`（`TS_AUTHKEY` / `TS_API_KEY` / `null`）で確かめられます（値は出しません）。受信側（muse-vm:8090）との間では鍵の照合をしません。Worker は `Authorization` を送らず、受信側の応答はそのまま返します。
 
 ## デプロイ
 
 ```sh
 npm install
 npx wrangler secret put TS_AUTHKEY   # 任意（未設定なら TS_API_KEY を使う）
-npx wrangler secret put TS_API_KEY
+npx wrangler secret put TS_API_KEY   # 任意（TS_AUTHKEY を使うなら不要）
 npx wrangler secret put WORKER_API_KEY
 npx wrangler secret put MONITOR_HMAC_SECRET
 npx wrangler deploy
