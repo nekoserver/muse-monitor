@@ -7,7 +7,7 @@ import type { IPNCallbacks, IPNConfig } from "../src/wasm-ipn";
 //    gets a misleading error, or a later request uses the node as if it were up;
 //  - several requests at once (the dashboard's "全て取得" sends 15) start several nodes;
 //  - muse-vm is missing from the netmap, or its IP changed after re-registering;
-//  - the receiver answers too much, or a key leaks into /status;
+//  - the receiver answers too much, or the TS_API_KEY is not sent / leaks into /status;
 //  - the node's state is not persisted, so every restart needs a fresh login.
 
 type Req = { url: string; method?: string; headers?: [string, string][] };
@@ -86,7 +86,7 @@ const gateway = (env: Record<string, string> = ENV, ctx = makeCtx().ctx) => new 
 const get = (gw: MonitorGateway, path: string) => gw.fetch(new Request(`http://do${path}`));
 
 describe("GET /monitor/<section>", () => {
-  it("joins with the auth key, finds muse-vm, and relays the receiver's answer", async () => {
+  it("joins with the auth key, finds muse-vm, and relays the receiver's answer with the TS_API_KEY", async () => {
     const gw = gateway();
     const res = await get(gw, "/monitor/jobs");
     expect(res.status).toBe(200);
@@ -96,7 +96,7 @@ describe("GET /monitor/<section>", () => {
     expect(node.config).toMatchObject({ authKey: "tskey-auth-secret", hostname: "muse-monitor", ephemeral: false });
     expect(node.login).toHaveBeenCalledWith("tskey-auth-secret");
     expect(node.requests.map((r) => r.url)).toEqual(["http://100.86.29.77:8090/health", "http://100.86.29.77:8090/monitor/jobs"]);
-    expect(node.requests[1]).toMatchObject({ method: "GET" });
+    expect(node.requests[1]).toMatchObject({ method: "GET", headers: [["Authorization", "Bearer ts-api-key-secret"]] });
   });
 
   it("passes the receiver's other statuses and bodies through unchanged", async () => {
@@ -109,20 +109,40 @@ describe("GET /monitor/<section>", () => {
     expect(await res.json()).toEqual({ error: "timeout" });
   });
 
-  it("sends no Authorization header to the receiver (no key matching)", async () => {
-    const gw = gateway({ TS_AUTHKEY: "tskey-auth-only" });
-    expect((await get(gw, "/monitor/jobs")).status).toBe(200);
-    expect(nodes[0].requests[1].headers ?? []).toEqual([]);
-  });
-
-  it("relays a 401 from the receiver unchanged (an old receiver that still checks a key)", async () => {
+  it("explains a 401 from the receiver instead of relaying a bare unauthorized", async () => {
     const gw = gateway();
     await get(gw, "/monitor/status");
     nodes[0].handler = async (req) =>
       new URL(req.url).pathname === "/health" ? { status: 200 } : { status: 401, body: '{"error":"unauthorized"}' };
     const res = await get(gw, "/monitor/status");
     expect(res.status).toBe(401);
-    expect(await res.json()).toEqual({ error: "unauthorized" });
+    const body = await res.json();
+    expect(body).toMatchObject({ error: "receiver_unauthorized", keySource: "TS_API_KEY", receiver: { error: "unauthorized" } });
+    expect(body.message).toContain("MUSE_CODE_WASM_API_KEY");
+    expect(JSON.stringify(body)).not.toContain("ts-api-key-secret");
+  });
+
+  it("explains a 503 from the receiver as a missing key on the receiver side", async () => {
+    const gw = gateway();
+    await get(gw, "/monitor/status");
+    nodes[0].handler = async (req) =>
+      new URL(req.url).pathname === "/health" ? { status: 200 } : { status: 503, body: "no key" };
+    const res = await get(gw, "/monitor/status");
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ error: "receiver_key_not_configured", receiver: "no key" });
+  });
+
+  it("sends TS_AUTHKEY as the Bearer when TS_API_KEY is not set", async () => {
+    const gw = gateway({ TS_AUTHKEY: "tskey-auth-only" });
+    expect((await get(gw, "/monitor/jobs")).status).toBe(200);
+    expect(nodes[0].requests[1].headers).toEqual([["Authorization", "Bearer tskey-auth-only"]]);
+  });
+
+  it("does not send a request with an empty or undefined Bearer when neither key is set", async () => {
+    const res = await get(gateway({}), "/monitor/jobs");
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ error: "receiver_key_missing" });
+    expect(nodes).toHaveLength(0);
   });
 
   it("returns 404 for a section outside the list without starting the node", async () => {
@@ -224,6 +244,7 @@ describe("node start failures", () => {
     expect(res.status).toBe(200);
     expect(nodes[0].config).toMatchObject({ authKey: "tskey-auth-shared" });
     expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-shared");
+    expect(nodes[0].requests[1].headers).toEqual([["Authorization", "Bearer tskey-auth-shared"]]);
     expect(await (await get(gw, "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_API_KEY", loginUrl: null });
   });
 
@@ -288,8 +309,7 @@ describe("GET /public-status (for /health, no secrets)", () => {
   it("starts the node in the background, so the state can be checked without a key", async () => {
     const gw = gateway({ TS_API_KEY: "k" });
     const first = await (await get(gw, "/public-status")).json();
-    expect(first).toMatchObject({ authKeySource: "TS_API_KEY", loginPending: false });
-    expect(first).not.toHaveProperty("receiverKeySource");
+    expect(first).toMatchObject({ authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY", loginPending: false });
     await new Promise((r) => setTimeout(r, 0));
     expect(nodes).toHaveLength(1);
     expect(await (await get(gw, "/public-status")).json()).toMatchObject({ node: "Running", receiverCandidates: 1 });
@@ -301,7 +321,7 @@ describe("GET /public-status (for /health, no secrets)", () => {
     await get(gw, "/monitor/jobs");
     const text = await (await get(gw, "/public-status")).text();
     expect(JSON.parse(text)).toEqual({
-      node: "Running", authKeySource: "TS_AUTHKEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
+      node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
       receiverPort: 8090, receiverProbes: [{ name: "muse-vm", result: "ok" }],
     });
     for (const secret of ["100.86.29.77", "tskey-auth-secret", "ts-api-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
