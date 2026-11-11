@@ -15,8 +15,8 @@ GET /monitor/<section>
 - 相手の特定: 基名 `muse-vm` のみを固定とし、実 IP は netmap の
   ピア（`muse-vm`、`muse-vm-1`、…）から候補を挙げ、`/health` への
   到達で判定する。IP の固定指定はしない
-- 認証: `Authorization: Bearer <TS_API_KEY>` 必須。
-  未設定・不一致は 401、受信側に鍵が未設定なら 503
+- 認証: なし（鍵の照合はしない）。Worker は `Authorization` を送らない。
+  tailnet の中からだけ呼ばれる前提で、公開範囲は受信側の待ち受けアドレスで絞る
 
 ## レスポンス
 
@@ -47,5 +47,4 @@ pending / execlog / sdkhealth / sdkprofiles / sdksessions / sdkts
 - section の追加・削除は、この文書と Worker 側
   （`src/index.ts` の表示項目、`src/do.ts` の許可リスト）を
   同時に変更すること
-- 認証方式を変える場合は、受信側と Worker のシークレット
-  （`TS_API_KEY`）を合わせて変更すること
+- 認証を足す場合は、受信側と Worker を同時に変更すること
