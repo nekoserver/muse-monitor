@@ -50,7 +50,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 7,
+      status: "ok", worker: "muse-monitor", revision: 8,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -63,7 +63,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 7, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 8, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -113,6 +113,88 @@ describe("bearer routes", () => {
     (env as { WORKER_API_KEY: string }).WORKER_API_KEY = "";
     expect((await worker.fetch(call("/api/status", { Authorization: "Bearer " }), env)).status).toBe(401);
     expect(calls).toEqual([]);
+  });
+});
+
+describe("login cookie: keeps the authenticated state for 7 days, never the key", () => {
+  const auth = { Authorization: `Bearer ${WORKER_API_KEY}` };
+  const cookieOf = (res: Response) => (res.headers.get("Set-Cookie") ?? "").split(";")[0];
+
+  it("a request with the key to /api/status sets an HttpOnly, Secure, SameSite=Strict cookie for 7 days that does not contain the key", async () => {
+    const { env } = makeEnv();
+    const res = await worker.fetch(call("/api/status", auth), env);
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get("Set-Cookie") ?? "";
+    expect(setCookie).toMatch(/^mm_auth=\d+\.[0-9a-f]{64}; /);
+    for (const attr of ["Path=/", "Max-Age=604800", "HttpOnly", "Secure", "SameSite=Strict"]) expect(setCookie).toContain(attr);
+    expect(setCookie).not.toContain(WORKER_API_KEY);
+    expect(await res.json()).toEqual({ from: "do", url: "http://do/status" });
+  });
+
+  it("the cookie alone opens /api/status and /api/monitor/*, without issuing a new cookie (7 days from login, not extended)", async () => {
+    const { env, calls } = makeEnv();
+    const cookie = cookieOf(await worker.fetch(call("/api/status", auth), env));
+    for (const path of ["/api/status", "/api/monitor/jobs"]) {
+      const res = await worker.fetch(call(path, { Cookie: `other=1; ${cookie}` }), env);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get("Set-Cookie"), path).toBeNull();
+    }
+    expect(calls).toEqual(["http://do/status", "http://do/status", "http://do/monitor/jobs"]);
+  });
+
+  it("stops working after 7 days", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-11T00:00:00Z"));
+    const { env } = makeEnv();
+    const cookie = cookieOf(await worker.fetch(call("/api/status", auth), env));
+    vi.setSystemTime(new Date("2026-11-17T23:59:00Z"));
+    expect((await worker.fetch(call("/api/status", { Cookie: cookie }), env)).status).toBe(200);
+    vi.setSystemTime(new Date("2026-11-18T00:00:01Z"));
+    expect((await worker.fetch(call("/api/status", { Cookie: cookie }), env)).status).toBe(401);
+  });
+
+  it("rejects a tampered cookie, a stretched expiry, and a cookie made under another WORKER_API_KEY", async () => {
+    const { env, calls } = makeEnv();
+    const cookie = cookieOf(await worker.fetch(call("/api/status", auth), env));
+    const [name, value] = cookie.split("=");
+    const [exp, sig] = value.split(".");
+    const bad = [
+      `${name}=${exp}.${sig.slice(0, -1)}${sig.endsWith("0") ? "1" : "0"}`,
+      `${name}=${Number(exp) + 86400 * 365}.${sig}`,
+      `${name}=garbage`,
+      `${name}=`,
+    ];
+    const other = makeEnv();
+    (other.env as { WORKER_API_KEY: string }).WORKER_API_KEY = "another-worker-key-0000";
+    calls.length = 0;
+    for (const c of bad) expect((await worker.fetch(call("/api/monitor/jobs", { Cookie: c }), env)).status, c).toBe(401);
+    expect((await worker.fetch(call("/api/monitor/jobs", { Cookie: cookie }), other.env)).status).toBe(401);
+    expect(calls).toEqual([]);
+  });
+
+  it("a wrong key sets no cookie", async () => {
+    const { env } = makeEnv();
+    const res = await worker.fetch(call("/api/status", { Authorization: "Bearer nope" }), env);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("POST /api/logout clears the cookie", async () => {
+    const { env } = makeEnv();
+    const res = await worker.fetch(call("/api/logout", {}, "POST"), env);
+    expect(res.status).toBe(200);
+    const setCookie = res.headers.get("Set-Cookie") ?? "";
+    expect(setCookie).toMatch(/^mm_auth=; /);
+    expect(setCookie).toContain("Max-Age=0");
+  });
+
+  it("the dashboard sends no Authorization header when the key box is empty (the cookie is used), and has a logout button; the key is never stored in the browser", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    expect(html).toContain('id="logout"');
+    expect(html).toContain("/api/logout");
+    expect(html).toMatch(/function headers\(\) \{[^}]*key\(\) \?/);
+    expect(html).not.toMatch(/localStorage|sessionStorage|document\.cookie/);
   });
 });
 
