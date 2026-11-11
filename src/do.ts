@@ -60,6 +60,10 @@ const SECTIONS = new Set([
   "sdkprofiles", "sdksessions", "sdkts",
 ]);
 
+/** How many extra probes, and how far apart, before answering receiver_not_found. */
+export const RECEIVER_RETRIES = 2;
+export const RECEIVER_RETRY_DELAY_MS = 2500;
+
 export class MonitorGateway extends DurableObject<Env> {
   private ipn: IPN | null = null;
   /** Single flight for creating the node: concurrent requests share one start. */
@@ -239,6 +243,21 @@ export class MonitorGateway extends DurableObject<Env> {
     return Response.json({ error: "not found" }, { status: 404 });
   }
 
+  /**
+   * Resolve, and while muse-vm is in the netmap but its receiver does not
+   * answer, wait and probe again a few times: the receiver restarts within
+   * seconds (systemd Restart=always), so a request that lands in that window
+   * should not end in receiver_not_found.
+   */
+  private async resolveReceiverPatiently(ipn: IPN, force: boolean): Promise<string | null> {
+    let ip = await this.resolveReceiver(ipn, force);
+    for (let i = 0; !ip && i < RECEIVER_RETRIES && candidatesFor(this.peers, RECEIVER_NAME).length > 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, RECEIVER_RETRY_DELAY_MS));
+      ip = await this.resolveReceiver(ipn, true);
+    }
+    return ip;
+  }
+
   /** Resolve (or re-resolve) the receiver's current tailnet IP. */
   private async resolveReceiver(ipn: IPN, force: boolean): Promise<string | null> {
     return this.resolver.resolve((req) => ipn.fetch(req), this.peers, force);
@@ -265,7 +284,7 @@ export class MonitorGateway extends DurableObject<Env> {
         { status: 502 },
       );
     }
-    let ip = await this.resolveReceiver(ipn, false);
+    let ip = await this.resolveReceiverPatiently(ipn, false);
     if (!ip) {
       return Response.json(
         this.receiverNotFound(),
@@ -278,7 +297,7 @@ export class MonitorGateway extends DurableObject<Env> {
     } catch {
       // Transport failed against the cached peer: re-resolve once.
       this.resolver.invalidate();
-      ip = await this.resolveReceiver(ipn, true);
+      ip = await this.resolveReceiverPatiently(ipn, true);
       if (!ip) {
         return Response.json(
           this.receiverNotFound(),
@@ -365,7 +384,7 @@ export class MonitorGateway extends DurableObject<Env> {
     if (candidates === 0) {
       message = `no peer named ${RECEIVER_NAME}(-*) in the netmap; is ${RECEIVER_NAME} online in the tailnet?`;
     } else if (probes.some((p) => /refused/i.test(p.result))) {
-      message = `${RECEIVER_NAME} refused :${RECEIVER_PORT}; the receiver (lib/muse/samples/receiver.py) is not listening on its tailnet address. Start it on ${RECEIVER_NAME} with --host 0.0.0.0 (or its tailnet IP) and --port ${RECEIVER_PORT}`;
+      message = `${RECEIVER_NAME} refused :${RECEIVER_PORT}; the receiver (lib/muse/samples/receiver.py) is not listening on its tailnet address (still refused after retrying for a few seconds). Start it on ${RECEIVER_NAME} with systemctl --user start muse-receiver (it listens on 0.0.0.0:${RECEIVER_PORT}; lib/muse/SPEC.scripts.md 4.0) and check with sh lib/muse/samples/receiver-check.sh`;
     } else if (probes.some((p) => p.result.startsWith("HTTP "))) {
       message = `${RECEIVER_NAME}:${RECEIVER_PORT} answered /health with something other than 200; check that the receiver on that port is receiver.py`;
     } else {

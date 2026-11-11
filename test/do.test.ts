@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MonitorGateway } from "../src/do";
+import { MonitorGateway, RECEIVER_RETRIES, RECEIVER_RETRY_DELAY_MS } from "../src/do";
 import type { IPNCallbacks, IPNConfig } from "../src/wasm-ipn";
 
 // What can break between the DO and the receiver on muse-vm:
@@ -191,7 +191,10 @@ describe("GET /monitor/<section>", () => {
       node.handler = async () => { throw new Error("connect tcp 100.86.29.77:8090: connection was refused"); };
       queueMicrotask(() => node.up());
     };
-    const res = await get(gateway(), "/monitor/jobs");
+    vi.useFakeTimers();
+    const pending = get(gateway(), "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(RECEIVER_RETRY_DELAY_MS * RECEIVER_RETRIES + 1000);
+    const res = await pending;
     expect(res.status).toBe(502);
     const text = await res.text();
     const body = JSON.parse(text);
@@ -200,9 +203,45 @@ describe("GET /monitor/<section>", () => {
       candidates: 1,
       probes: [{ name: "muse-vm", result: expect.stringContaining("connection was refused") }],
     });
-    expect(body.message).toContain("receiver.py");
-    expect(body.message).toContain("--host");
+    expect(body.message).toContain("muse-receiver");
+    expect(body.message).toContain("receiver-check.sh");
     expect(text).not.toContain("100.86.29.77");
+    // 1回目 + 再試行の分だけ /health を叩いた
+    expect(nodes[0].requests.filter((r) => r.url.endsWith("/health"))).toHaveLength(1 + RECEIVER_RETRIES);
+  });
+
+  it("waits and probes again while the receiver is restarting, and answers once it is back", async () => {
+    // 受信側は systemd の Restart=always で数秒後に戻る。その間に来た要求を receiver_not_found にしない
+    let refusals = 2;
+    onLogin = (node) => {
+      node.handler = async (req) => {
+        if (new URL(req.url).pathname === "/health" && refusals > 0) { refusals--; throw new Error("connection was refused"); }
+        return new URL(req.url).pathname === "/health" ? { status: 200 } : { status: 200, body: '{"output":"back"}' };
+      };
+      queueMicrotask(() => node.up());
+    };
+    vi.useFakeTimers();
+    const pending = get(gateway(), "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(RECEIVER_RETRY_DELAY_MS * RECEIVER_RETRIES + 1000);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ output: "back" });
+    expect(nodes[0].requests.filter((r) => r.url.endsWith("/health"))).toHaveLength(3);
+  });
+
+  it("does not wait when muse-vm is not in the netmap at all", async () => {
+    onLogin = (node) => queueMicrotask(() => node.up([["ipad", "100.74.35.120"]]));
+    vi.useFakeTimers();
+    const pending = get(gateway(), "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(100);
+    const res = await pending;
+    expect(res.status).toBe(502);
+    expect(nodes[0].requests).toEqual([]);
+  });
+
+  it("keeps the retries short: at most a few seconds in total", () => {
+    expect(RECEIVER_RETRIES).toBeGreaterThanOrEqual(2);
+    expect(RECEIVER_RETRY_DELAY_MS * RECEIVER_RETRIES).toBeLessThanOrEqual(8000);
   });
 
   it("says /health answered wrongly when muse-vm answers :8090 with a non-200", async () => {
@@ -210,7 +249,10 @@ describe("GET /monitor/<section>", () => {
       node.handler = async () => ({ status: 404 });
       queueMicrotask(() => node.up());
     };
-    const body = await (await get(gateway(), "/monitor/jobs")).json();
+    vi.useFakeTimers();
+    const pending = get(gateway(), "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(RECEIVER_RETRY_DELAY_MS * RECEIVER_RETRIES + 1000);
+    const body = await (await pending).json();
     expect(body).toMatchObject({ error: "receiver_not_found", probes: [{ name: "muse-vm", result: "HTTP 404" }] });
     expect(body.message).toContain("/health");
   });
