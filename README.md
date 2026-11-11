@@ -92,9 +92,9 @@ IP はノードの再登録で変わり、名前には数字の接尾辞が付�
 | `TS_API_KEY` | muse-monitor のシークレット | Worker が受信側を呼ぶ際の Bearer | 任意の文字列。受信側の起動時に決める値と揃える |
 | `WORKER_API_KEY` | muse-monitor のシークレット | ダッシュボードの `/api/*` を呼ぶ際の Bearer | 任意の文字列 |
 | `MONITOR_HMAC_SECRET` | muse-monitor と本体 Worker の両方 | 本体 Worker からの HMAC 署名の共有鍵 | 両方に同じ任意の文字列 |
-| `MUSE_CODE_WASM_API_KEY` | 受信側の起動時の環境変数 | 受信側（:8090）が受ける Bearer の正 | 任意の文字列（`TS_API_KEY` と揃える）。名前は受信側を作った muse-code-wasm 由来 |
+| `TS_API_KEY` | 受信側の起動時の環境変数 | 受信側（:8090）が受ける Bearer の正 | Worker 側の `TS_API_KEY` と同じ値 |
 
-現時点では受信側は未起動で、キーはどれも未決定です。この表は設定時の対応表です。
+受信側は muse-vm の :8090 で待ち受けます。この表は設定時の対応表です。
 
 ## デプロイ
 
