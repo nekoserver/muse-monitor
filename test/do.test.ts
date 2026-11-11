@@ -306,12 +306,14 @@ describe("node start failures", () => {
 });
 
 describe("GET /public-status (for /health, no secrets)", () => {
-  it("before any request: not-started, which secrets hold the keys, without starting the node", async () => {
+  it("starts the node in the background, so the state can be checked without a key", async () => {
     const gw = gateway({ TS_API_KEY: "k" });
-    expect(await (await get(gw, "/public-status")).json()).toEqual({
-      node: "not-started", authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 0, receiverResolved: false,
-    });
-    expect(nodes).toHaveLength(0);
+    const first = await (await get(gw, "/public-status")).json();
+    expect(first).toMatchObject({ authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY", loginPending: false });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(nodes).toHaveLength(1);
+    expect(await (await get(gw, "/public-status")).json()).toMatchObject({ node: "Running", receiverCandidates: 1 });
+    expect(nodes).toHaveLength(1);
   });
 
   it("after start: Running and whether muse-vm was found, never the IP, login URL or key values", async () => {
