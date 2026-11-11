@@ -85,8 +85,15 @@ export function candidatesFor(
  * Stateful resolver: probes candidates via an unauthenticated health
  * path and caches the first reachable peer IP.
  */
+/** Hide IPv4 addresses in an error message (it is shown on the unauthenticated /health). */
+function maskIps(text: string): string {
+  return text.replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "x.x.x.x");
+}
+
 export class PeerResolver {
   private resolvedIp: string | null = null;
+  /** Outcome per candidate of the last resolve (name only, IPs masked): "ok", "HTTP 404", "error: ...", "timeout (Nms)". */
+  lastProbes: { name: string; result: string }[] = [];
 
   constructor(
     private readonly baseName: string,
@@ -97,6 +104,10 @@ export class PeerResolver {
 
   get cachedIp(): string | null {
     return this.resolvedIp;
+  }
+
+  get probePort(): number {
+    return this.port;
   }
 
   /** Drop the cache (call when transport against the cached IP fails). */
@@ -110,17 +121,22 @@ export class PeerResolver {
     force = false,
   ): Promise<string | null> {
     if (this.resolvedIp && !force) return this.resolvedIp;
+    const probes: { name: string; result: string }[] = [];
     for (const c of candidatesFor(peers, this.baseName)) {
-      if (await this.probe(probeFetch, c.ip)) {
+      const result = await this.probe(probeFetch, c.ip);
+      probes.push({ name: c.name, result });
+      if (result === "ok") {
+        this.lastProbes = probes;
         this.resolvedIp = c.ip;
         return c.ip;
       }
     }
+    this.lastProbes = probes;
     this.resolvedIp = null;
     return null;
   }
 
-  private async probe(probeFetch: ProbeFetch, ip: string): Promise<boolean> {
+  private async probe(probeFetch: ProbeFetch, ip: string): Promise<string> {
     try {
       const attempt = (async () => {
         const resp = await probeFetch({
@@ -129,14 +145,14 @@ export class PeerResolver {
           headers: [],
         });
         resp.cancel();
-        return resp.status === 200;
+        return resp.status === 200 ? "ok" : `HTTP ${resp.status}`;
       })();
-      const timeout = new Promise<boolean>((resolve) =>
-        setTimeout(() => resolve(false), this.probeTimeoutMs),
+      const timeout = new Promise<string>((resolve) =>
+        setTimeout(() => resolve(`timeout (${this.probeTimeoutMs}ms)`), this.probeTimeoutMs),
       );
       return await Promise.race([attempt, timeout]);
-    } catch {
-      return false;
+    } catch (err) {
+      return `error: ${maskIps(err instanceof Error ? err.message : String(err)).slice(0, 200)}`;
     }
   }
 }

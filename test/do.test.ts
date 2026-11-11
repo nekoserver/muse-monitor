@@ -322,8 +322,21 @@ describe("GET /public-status (for /health, no secrets)", () => {
     const text = await (await get(gw, "/public-status")).text();
     expect(JSON.parse(text)).toEqual({
       node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
+      receiverPort: 8090, receiverProbes: [{ name: "muse-vm", result: "ok" }],
     });
     for (const secret of ["100.86.29.77", "tskey-auth-secret", "ts-api-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
+  });
+
+  it("when Running but the receiver is not resolved yet, probes it in the background and shows why it failed", async () => {
+    const gw = gateway();
+    await get(gw, "/public-status");
+    await new Promise((r) => setTimeout(r, 0));
+    nodes[0].handler = async () => { throw new Error("dial tcp 100.86.29.77:8090: connection refused"); };
+    await get(gw, "/public-status");
+    await new Promise((r) => setTimeout(r, 10));
+    const text = await (await get(gw, "/public-status")).text();
+    expect(JSON.parse(text)).toMatchObject({ node: "Running", receiverCandidates: 1, receiverResolved: false, receiverProbes: [{ name: "muse-vm", result: "error: dial tcp x.x.x.x:8090: connection refused" }] });
+    expect(text).not.toContain("100.86.29.77");
   });
 
   it("says a login is pending without showing the URL", async () => {
