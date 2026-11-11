@@ -52,11 +52,24 @@ Durable Object (MonitorGateway)
 | パス                    | 認証          | 説明                     |
 |-------------------------|---------------|--------------------------|
 | `GET /`                 | 不要          | ダッシュボード画面       |
-| `GET /health`           | 不要          | Worker 自身の死活        |
+| `GET /health`           | 不要          | Worker の死活、コードの版(`revision`)、デプロイした版(`version`)、ノードの公開状態(`node`) |
 | `GET /api/status`       | WORKER_API_KEY | WASM ノードの状態       |
 | `GET /api/monitor/<s>`  | WORKER_API_KEY | section のデータを返す  |
 | `GET /api/hmac/monitor/<s>` | HMAC 署名  | 本体 Worker 専用。署名が無い・不正・時刻が ±300 秒を超えるものは全て拒否する |
 | `GET /api/hmac/status`  | HMAC 署名      | 本体 Worker 専用。ノード状態（署名対象は `status`） |
+
+`GET /health` は鍵なしで、どの版が動いていて、ノードがどういう状態かを確かめるためのもの。秘密は含めない(ログインURL・IPアドレス・鍵の値は出さない)。
+
+| 項目 | 内容 |
+|---|---|
+| `revision` | コードの版の目印。2以上なら netmap の読み違いの修正(#7)が入っている。3で `node` を追加 |
+| `version` | `[version_metadata]` の版のID・タグ・デプロイ時刻。無ければ `null` |
+| `node.node` | ノードの状態(`not-started`・`NeedsLogin`・`Running` など) |
+| `node.authKeySource` | ノードの参加に使う鍵のシークレット名(`TS_AUTHKEY` / `TS_API_KEY` / `null`) |
+| `node.receiverKeySource` | 受信側へ送る鍵のシークレット名 |
+| `node.loginPending` | 対話ログインの承認待ちか(URLは `/api/status` で鍵を付けて見る) |
+| `node.receiverCandidates` | netmap に見えている muse-vm(-N) の数。0 なら muse-vm がピアに見えていない |
+| `node.receiverResolved` | `/health` への到達で受信側の IP を決められたか |
 
 HMAC の形式（本体 Worker からの呼び出し用）:
 
