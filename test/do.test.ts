@@ -81,12 +81,12 @@ function makeCtx(initial: Record<string, unknown> = {}) {
   };
   return { ctx: ctx as unknown as DurableObjectState, stored, waits };
 }
-const ENV = { TS_API_KEY: "ts-api-key-secret", TS_AUTHKEY: "tskey-auth-secret" };
+const ENV = { TS_API_KEY: "tskey-auth-secret" };
 const gateway = (env: Record<string, string> = ENV, ctx = makeCtx().ctx) => new MonitorGateway(ctx, env as never);
 const get = (gw: MonitorGateway, path: string) => gw.fetch(new Request(`http://do${path}`));
 
 describe("GET /monitor/<section>", () => {
-  it("joins with the auth key, finds muse-vm, and relays the receiver's answer with the TS_API_KEY", async () => {
+  it("joins with TS_API_KEY, finds muse-vm, and sends the same TS_API_KEY to the receiver", async () => {
     const gw = gateway();
     const res = await get(gw, "/monitor/jobs");
     expect(res.status).toBe(200);
@@ -96,7 +96,7 @@ describe("GET /monitor/<section>", () => {
     expect(node.config).toMatchObject({ authKey: "tskey-auth-secret", hostname: "muse-monitor", ephemeral: false });
     expect(node.login).toHaveBeenCalledWith("tskey-auth-secret");
     expect(node.requests.map((r) => r.url)).toEqual(["http://100.86.29.77:8090/health", "http://100.86.29.77:8090/monitor/jobs"]);
-    expect(node.requests[1]).toMatchObject({ method: "GET", headers: [["Authorization", "Bearer ts-api-key-secret"]] });
+    expect(node.requests[1]).toMatchObject({ method: "GET", headers: [["Authorization", "Bearer tskey-auth-secret"]] });
   });
 
   it("passes the receiver's other statuses and bodies through unchanged", async () => {
@@ -118,8 +118,8 @@ describe("GET /monitor/<section>", () => {
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body).toMatchObject({ error: "receiver_unauthorized", keySource: "TS_API_KEY", receiver: { error: "unauthorized" } });
-    expect(body.message).toContain("MUSE_CODE_WASM_API_KEY");
-    expect(JSON.stringify(body)).not.toContain("ts-api-key-secret");
+    expect(body.message).toContain("TS_API_KEY");
+    expect(JSON.stringify(body)).not.toContain("tskey-auth-secret");
   });
 
   it("explains a 503 from the receiver as a missing key on the receiver side", async () => {
@@ -132,10 +132,11 @@ describe("GET /monitor/<section>", () => {
     expect(await res.json()).toMatchObject({ error: "receiver_key_not_configured", receiver: "no key" });
   });
 
-  it("sends TS_AUTHKEY as the Bearer when TS_API_KEY is not set", async () => {
-    const gw = gateway({ TS_AUTHKEY: "tskey-auth-only" });
-    expect((await get(gw, "/monitor/jobs")).status).toBe(200);
-    expect(nodes[0].requests[1].headers).toEqual([["Authorization", "Bearer tskey-auth-only"]]);
+  it("reads only TS_API_KEY: a leftover TS_AUTHKEY is neither used to join nor sent", async () => {
+    const res = await get(gateway({ TS_AUTHKEY: "tskey-other" }), "/monitor/jobs");
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ error: "receiver_key_missing" });
+    expect(nodes).toHaveLength(0);
   });
 
   it("does not send a request with an empty or undefined Bearer when neither key is set", async () => {
@@ -238,7 +239,7 @@ describe("node start failures", () => {
     expect(status).toMatchObject({ loginUrl: "https://login.tailscale.com/a/abc123", authKeyConfigured: true, authKeySource: "TS_API_KEY" });
   });
 
-  it("uses TS_API_KEY as the auth key when TS_AUTHKEY is not set, instead of asking for interactive login", async () => {
+  it("uses TS_API_KEY as the auth key instead of asking for interactive login", async () => {
     const gw = gateway({ TS_API_KEY: "tskey-auth-shared" });
     const res = await get(gw, "/monitor/jobs");
     expect(res.status).toBe(200);
@@ -248,15 +249,9 @@ describe("node start failures", () => {
     expect(await (await get(gw, "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_API_KEY", loginUrl: null });
   });
 
-  it("prefers TS_AUTHKEY when both are set", async () => {
-    await get(gateway(), "/monitor/jobs");
-    expect(nodes[0].config).toMatchObject({ authKey: "tskey-auth-secret" });
-    expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-secret");
-  });
-
   it("reports authKeyConfigured from TS_API_KEY before the node starts", async () => {
     expect(await (await get(gateway({ TS_API_KEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_API_KEY" });
-    expect(await (await get(gateway({ TS_AUTHKEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_AUTHKEY" });
+    expect(await (await get(gateway({ TS_AUTHKEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: false, authKeySource: null });
     expect(await (await get(gateway({ TS_API_KEY: "" }), "/status")).json()).toMatchObject({ authKeyConfigured: false, authKeySource: null });
   });
 
@@ -266,7 +261,7 @@ describe("node start failures", () => {
     const gw = gateway();
     const first = get(gw, "/monitor/jobs");
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(await (await first).json()).toMatchObject({ error: "tailnet_unavailable", message: expect.stringContaining("auth key from: TS_AUTHKEY") });
+    expect(await (await first).json()).toMatchObject({ error: "tailnet_unavailable", message: expect.stringContaining("auth key from: TS_API_KEY") });
 
     // Second request: the node exists but is still not Running. It must not be used as if it were up.
     const second = get(gw, "/monitor/jobs");
@@ -321,7 +316,7 @@ describe("GET /public-status (for /health, no secrets)", () => {
     await get(gw, "/monitor/jobs");
     const text = await (await get(gw, "/public-status")).text();
     expect(JSON.parse(text)).toEqual({
-      node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
+      node: "Running", authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
       receiverPort: 8090, receiverProbes: [{ name: "muse-vm", result: "ok" }],
     });
     for (const secret of ["100.86.29.77", "tskey-auth-secret", "ts-api-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
@@ -356,7 +351,7 @@ describe("GET /status", () => {
   it("before any request: not-started, without starting the node", async () => {
     const gw = gateway();
     expect(await (await get(gw, "/status")).json()).toEqual({
-      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_AUTHKEY",
+      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_API_KEY",
     });
     expect(nodes).toHaveLength(0);
   });

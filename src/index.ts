@@ -12,18 +12,15 @@
  *
  * Auth (keys are separate and never mixed):
  *   - callers present WORKER_API_KEY (Bearer) to /api/*
- *   - the DO presents TS_API_KEY (or TS_AUTHKEY when TS_API_KEY is
- *     not set) to the receiver
- *   - the WASM node joins with TS_AUTHKEY, or TS_API_KEY when
- *     TS_AUTHKEY is not set; interactive login (approve the loginUrl
- *     from /api/status) only when neither is set
+ *   - one key, TS_API_KEY: the WASM node joins the tailnet with it and the
+ *     DO presents the same value to the receiver; interactive login (approve
+ *     the loginUrl from /api/status) only when it is not set
  */
 
 interface Env {
   MONITOR_GATEWAY: DurableObjectNamespace;
   WORKER_API_KEY: string;
   TS_API_KEY?: string;
-  TS_AUTHKEY?: string;
   MONITOR_HMAC_SECRET: string;
   /** wrangler.toml の [version_metadata]。デプロイした版のIDと時刻。 */
   CF_VERSION_METADATA?: { id: string; tag: string; timestamp: string };

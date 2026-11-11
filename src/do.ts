@@ -36,7 +36,6 @@ interface Env {
   // the operator opens the login URL (exposed in /api/status) and
   // approves the node once. With it, joining is unattended but the
   // key expires (90 days max) and a lost DO state then needs a new key.
-  TS_AUTHKEY?: string;
   TS_API_KEY?: string;
 }
 
@@ -84,29 +83,22 @@ export class MonitorGateway extends DurableObject<Env> {
   }
 
   /**
-   * The Tailscale auth key: TS_AUTHKEY, or TS_API_KEY when TS_AUTHKEY is
-   * not set (the operator keeps one key for both). Only when neither is set
-   * does the node fall back to interactive login.
+   * The one key, TS_API_KEY: the node joins the tailnet with it and presents
+   * the same value to the receiver as the Bearer (the receiver reads
+   * TS_API_KEY too). Without it the node falls back to interactive login and
+   * /monitor answers receiver_key_missing.
    */
   private authKey(): string | undefined {
-    return this.env.TS_AUTHKEY || this.env.TS_API_KEY || undefined;
+    return this.env.TS_API_KEY || undefined;
   }
 
-  /** Which secret the node's auth key comes from (never the value). */
-  private authKeySource(): "TS_AUTHKEY" | "TS_API_KEY" | null {
-    if (this.env.TS_AUTHKEY) return "TS_AUTHKEY";
-    if (this.env.TS_API_KEY) return "TS_API_KEY";
-    return null;
+  /** Which secret the key comes from (never the value). */
+  private authKeySource(): "TS_API_KEY" | null {
+    return this.env.TS_API_KEY ? "TS_API_KEY" : null;
   }
 
-  /**
-   * The Bearer presented to the receiver: TS_API_KEY, or TS_AUTHKEY when
-   * TS_API_KEY is not set (the operator keeps one key for both).
-   */
-  private receiverKey(): { value: string; source: "TS_API_KEY" | "TS_AUTHKEY" } | null {
-    if (this.env.TS_API_KEY) return { value: this.env.TS_API_KEY, source: "TS_API_KEY" };
-    if (this.env.TS_AUTHKEY) return { value: this.env.TS_AUTHKEY, source: "TS_AUTHKEY" };
-    return null;
+  private receiverKey(): { value: string; source: "TS_API_KEY" } | null {
+    return this.env.TS_API_KEY ? { value: this.env.TS_API_KEY, source: "TS_API_KEY" } : null;
   }
 
   private async loadState(): Promise<void> {
@@ -259,7 +251,7 @@ export class MonitorGateway extends DurableObject<Env> {
       return Response.json(
         {
           error: "receiver_key_missing",
-          message: "neither TS_API_KEY nor TS_AUTHKEY is set; set the key the receiver expects (MUSE_CODE_WASM_API_KEY) with wrangler secret put TS_API_KEY",
+          message: "TS_API_KEY is not set; set it with wrangler secret put TS_API_KEY (the same value as the receiver's TS_API_KEY)",
         },
         { status: 500 },
       );
@@ -342,13 +334,13 @@ export class MonitorGateway extends DurableObject<Env> {
         resp.status === 401
           ? {
               error: "receiver_unauthorized",
-              message: `the receiver on ${RECEIVER_NAME} rejected the Bearer from ${key.source}; it must equal the receiver's MUSE_CODE_WASM_API_KEY`,
+              message: `the receiver on ${RECEIVER_NAME} rejected the Bearer from ${key.source}; it must equal the receiver's TS_API_KEY`,
               keySource: key.source,
               receiver,
             }
           : {
               error: "receiver_key_not_configured",
-              message: `the receiver on ${RECEIVER_NAME} has no key configured; start it with MUSE_CODE_WASM_API_KEY set to the same value as ${key.source}`,
+              message: `the receiver on ${RECEIVER_NAME} has no key configured; start it with TS_API_KEY set to the same value as ${key.source}`,
               keySource: key.source,
               receiver,
             },

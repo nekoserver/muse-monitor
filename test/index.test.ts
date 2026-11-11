@@ -41,7 +41,7 @@ afterEach(() => { vi.useRealTimers(); });
 describe("open routes", () => {
   it("GET /health needs no key and shows the code revision, the deployed version and the node's public state", async () => {
     const { env, calls } = makeEnv();
-    const publicState = { node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true };
+    const publicState = { node: "Running", authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true };
     (env as Record<string, unknown>).MONITOR_GATEWAY = {
       idFromName: (name: string) => name,
       get: () => ({ fetch: async (url: string) => { calls.push(url); return Response.json(publicState); } }),
