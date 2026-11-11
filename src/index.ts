@@ -12,7 +12,8 @@
  *
  * Auth (keys are separate and never mixed):
  *   - callers present WORKER_API_KEY (Bearer) to /api/*
- *   - the DO sends no key to the receiver (tailnet only, no key matching)
+ *   - the DO presents TS_API_KEY (or TS_AUTHKEY when TS_API_KEY is
+ *     not set) to the receiver
  *   - the WASM node joins with TS_AUTHKEY, or TS_API_KEY when
  *     TS_AUTHKEY is not set; interactive login (approve the loginUrl
  *     from /api/status) only when neither is set
@@ -33,7 +34,7 @@ interface Env {
  * 2: netmapの読み違いの修正・鍵のフォールバック(nekoserver/muse-monitor#7)。3: /health にノードの公開状態を出す。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 4;
+const MONITOR_REVISION = 5;
 
 export { MonitorGateway } from "./do";
 
