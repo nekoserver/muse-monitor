@@ -268,7 +268,7 @@ export class MonitorGateway extends DurableObject<Env> {
     let ip = await this.resolveReceiver(ipn, false);
     if (!ip) {
       return Response.json(
-        { error: "receiver_not_found", message: `no reachable peer named ${RECEIVER_NAME}(-*)` },
+        this.receiverNotFound(),
         { status: 502 },
       );
     }
@@ -281,7 +281,7 @@ export class MonitorGateway extends DurableObject<Env> {
       ip = await this.resolveReceiver(ipn, true);
       if (!ip) {
         return Response.json(
-          { error: "receiver_not_found", message: `no reachable peer named ${RECEIVER_NAME}(-*)` },
+          this.receiverNotFound(),
           { status: 502 },
         );
       }
@@ -351,6 +351,27 @@ export class MonitorGateway extends DurableObject<Env> {
       status: resp.status,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  /**
+   * Why no receiver was found, from the last probes (IPs are already masked):
+   * not in the netmap, refused (nothing listens on the tailnet address), or
+   * /health answered with something other than 200.
+   */
+  private receiverNotFound() {
+    const candidates = candidatesFor(this.peers, RECEIVER_NAME).length;
+    const probes = this.resolver.lastProbes;
+    let message: string;
+    if (candidates === 0) {
+      message = `no peer named ${RECEIVER_NAME}(-*) in the netmap; is ${RECEIVER_NAME} online in the tailnet?`;
+    } else if (probes.some((p) => /refused/i.test(p.result))) {
+      message = `${RECEIVER_NAME} refused :${RECEIVER_PORT}; the receiver (lib/muse/samples/receiver.py) is not listening on its tailnet address. Start it on ${RECEIVER_NAME} with --host 0.0.0.0 (or its tailnet IP) and --port ${RECEIVER_PORT}`;
+    } else if (probes.some((p) => p.result.startsWith("HTTP "))) {
+      message = `${RECEIVER_NAME}:${RECEIVER_PORT} answered /health with something other than 200; check that the receiver on that port is receiver.py`;
+    } else {
+      message = `${RECEIVER_NAME}:${RECEIVER_PORT} did not answer /health (see probes)`;
+    }
+    return { error: "receiver_not_found", message, candidates, probes };
   }
 
   /** One GET against the receiver on a resolved peer IP. */

@@ -31,7 +31,7 @@ interface Env {
  * 2: netmapの読み違いの修正・鍵のフォールバック(nekoserver/muse-monitor#7)。3: /health にノードの公開状態を出す。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 5;
+const MONITOR_REVISION = 6;
 
 export { MonitorGateway } from "./do";
 

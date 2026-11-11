@@ -181,7 +181,38 @@ describe("GET /monitor/<section>", () => {
     onLogin = (node) => queueMicrotask(() => node.up([["ipad", "100.74.35.120"]]));
     const res = await get(gateway(), "/monitor/jobs");
     expect(res.status).toBe(502);
-    expect(await res.json()).toMatchObject({ error: "receiver_not_found" });
+    const body = await res.json();
+    expect(body).toMatchObject({ error: "receiver_not_found", candidates: 0, probes: [] });
+    expect(body.message).toContain("netmap");
+  });
+
+  it("says the receiver is not listening when muse-vm refuses :8090, with the probe results and no IP", async () => {
+    onLogin = (node) => {
+      node.handler = async () => { throw new Error("connect tcp 100.86.29.77:8090: connection was refused"); };
+      queueMicrotask(() => node.up());
+    };
+    const res = await get(gateway(), "/monitor/jobs");
+    expect(res.status).toBe(502);
+    const text = await res.text();
+    const body = JSON.parse(text);
+    expect(body).toMatchObject({
+      error: "receiver_not_found",
+      candidates: 1,
+      probes: [{ name: "muse-vm", result: expect.stringContaining("connection was refused") }],
+    });
+    expect(body.message).toContain("receiver.py");
+    expect(body.message).toContain("--host");
+    expect(text).not.toContain("100.86.29.77");
+  });
+
+  it("says /health answered wrongly when muse-vm answers :8090 with a non-200", async () => {
+    onLogin = (node) => {
+      node.handler = async () => ({ status: 404 });
+      queueMicrotask(() => node.up());
+    };
+    const body = await (await get(gateway(), "/monitor/jobs")).json();
+    expect(body).toMatchObject({ error: "receiver_not_found", probes: [{ name: "muse-vm", result: "HTTP 404" }] });
+    expect(body.message).toContain("/health");
   });
 
   it("returns delivery_unknown when the GET fails on every candidate after a healthy probe", async () => {
