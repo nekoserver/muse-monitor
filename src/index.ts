@@ -11,7 +11,9 @@
  * (see lib/muse/SPEC.md). This Worker only looks.
  *
  * Auth (keys are separate and never mixed):
- *   - callers present WORKER_API_KEY (Bearer) to /api/*
+ *   - callers present WORKER_API_KEY (Bearer) to /api/*; a Bearer request to
+ *     /api/status also sets a login cookie (7 days, holds no key) that opens
+ *     /api/* by itself (src/auth-cookie.ts)
  *   - one key, TS_API_KEY: the WASM node joins the tailnet with it and the
  *     DO presents the same value to the receiver; interactive login (approve
  *     the loginUrl from /api/status) only when it is not set
@@ -31,9 +33,10 @@ interface Env {
  * 2: netmapの読み違いの修正・鍵のフォールバック(nekoserver/muse-monitor#7)。3: /health にノードの公開状態を出す。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 7;
+const MONITOR_REVISION = 8;
 
 export { MonitorGateway } from "./do";
+import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
 
 const HMAC_WINDOW_S = 300;
 
@@ -82,6 +85,8 @@ async function hmacMatches(
     .join("");
   return timingSafeEqual(expected, sig.toLowerCase());
 }
+
+function nowS(): number { return Math.floor(Date.now() / 1000); }
 
 function bearerMatches(header: string | null, expected: string): boolean {
   if (!header || !expected) return false;
@@ -140,7 +145,9 @@ const DASHBOARD = `<!DOCTYPE html>
 <h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
 <p class="meta">実行系はここにはありません。依頼の受付はホスト側ダッシュボード、
 承認はホストのシェルでのみ行えます。</p>
-<p><label>API キー: <input type="password" id="key" size="32"></label>
+<p><label>API キー: <input type="password" id="key" size="32" autocomplete="off"></label>
+<button type="button" id="logout" onclick="logout()">ログアウト</button>
+<span class="meta">キーで認証が通ると、このブラウザで7日間ログインしたままになります(キーは保存しません)</span>
 <button type="button" onclick="loadAll()">全て取得</button>
 <span style="margin-left:1em">表示:
 <button type="button" class="viewbtn" data-v="tabs" onclick="setView('tabs')">タブ</button>
@@ -161,10 +168,16 @@ const DASHBOARD = `<!DOCTYPE html>
   const data = {};   // name -> text
   let view = "tabs", activeTab = CATS[0][0], treeSel = "status";
   function key() { return document.getElementById('key').value.trim(); }
+  function headers() { return key() ? { Authorization: 'Bearer ' + key() } : {}; }
+  async function logout() {
+    await fetch('/api/logout', { method: 'POST' });
+    document.getElementById('key').value = '';
+    document.getElementById('nodestat').textContent = 'ノード状態: （ログアウトしました）';
+  }
   async function load(name) {
     data[name] = "取得中…"; render();
     try {
-      const r = await fetch('/api/monitor/' + name, { headers: { Authorization: 'Bearer ' + key() } });
+      const r = await fetch('/api/monitor/' + name, { headers: headers() });
       const j = await r.json();
       data[name] = j.output !== undefined ? j.output : JSON.stringify(j, null, 2);
     } catch (err) { data[name] = '取得失敗: ' + err; }
@@ -173,7 +186,7 @@ const DASHBOARD = `<!DOCTYPE html>
   async function loadStatus() {
     const el = document.getElementById('nodestat');
     try {
-      const r = await fetch('/api/status', { headers: { Authorization: 'Bearer ' + key() } });
+      const r = await fetch('/api/status', { headers: headers() });
       const j = await r.json();
       const rcv = j.receiver || {};
       el.textContent = 'ノード状態: ' + (j.node ?? JSON.stringify(j)) +
@@ -219,6 +232,7 @@ const DASHBOARD = `<!DOCTYPE html>
   }
   function setView(v) { view = v; render(); }
   render();
+  loadStatus();  // 7日間の Cookie が残っていれば、キーを入れずに状態が出る
 </script>
 </body></html>`;
 
@@ -251,13 +265,23 @@ export default {
       });
     }
 
+    if (url.pathname === "/api/logout" && request.method === "POST") {
+      return Response.json({ ok: true }, { headers: { "Set-Cookie": clearAuthCookie() } });
+    }
+
     if (url.pathname === "/api/status" && request.method === "GET") {
-      if (!bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY)) {
+      const byKey = bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY);
+      if (!byKey && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
       const stub = env.MONITOR_GATEWAY.get(id);
-      return stub.fetch("http://do/status");
+      const res = await stub.fetch("http://do/status");
+      if (!byKey) return res;
+      // ログイン: 7日間の認証状態を Cookie に保つ(Cookie を使った要求では延ばさない)
+      const out = new Response(res.body, res);
+      out.headers.append("Set-Cookie", await makeAuthCookie(env.WORKER_API_KEY, nowS()));
+      return out;
     }
 
     if (url.pathname === "/api/hmac/status" && request.method === "GET") {
@@ -280,7 +304,8 @@ export default {
     }
 
     if (url.pathname.startsWith("/api/monitor/") && request.method === "GET") {
-      if (!bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY)) {
+      if (!bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY)
+        && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const section = url.pathname.slice("/api/monitor/".length);

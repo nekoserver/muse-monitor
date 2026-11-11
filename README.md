@@ -53,8 +53,9 @@ Durable Object (MonitorGateway)
 |-------------------------|---------------|--------------------------|
 | `GET /`                 | 不要          | ダッシュボード画面       |
 | `GET /health`           | 不要          | Worker の死活、コードの版(`revision`)、デプロイした版(`version`)、ノードの公開状態(`node`) |
-| `GET /api/status`       | WORKER_API_KEY | WASM ノードの状態       |
-| `GET /api/monitor/<s>`  | WORKER_API_KEY | section のデータを返す  |
+| `GET /api/status`       | WORKER_API_KEY かログイン Cookie | WASM ノードの状態。キーで呼ぶとログイン Cookie(7日)を発行 |
+| `GET /api/monitor/<s>`  | WORKER_API_KEY かログイン Cookie | section のデータを返す  |
+| `POST /api/logout`      | なし | ログイン Cookie を消す |
 | `GET /api/hmac/monitor/<s>` | HMAC 署名  | 本体 Worker 専用。署名が無い・不正・時刻が ±300 秒を超えるものは全て拒否する |
 | `GET /api/hmac/status`  | HMAC 署名      | 本体 Worker 専用。ノード状態（署名対象は `status`） |
 
@@ -87,7 +88,7 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 | 名前              | 用途                                   |
 |-------------------|----------------------------------------|
 | `TS_API_KEY`      | 鍵はこれ1つ。WASM ノードの Tailscale 参加と、受信 API への Bearer の両方に同じ値を使う。未設定なら対話ログイン（`/api/status` の `loginUrl` を開いて承認）になり、受信 API は呼ばない |
-| `WORKER_API_KEY`  | `/api/*` への Bearer 認証              |
+| `WORKER_API_KEY`  | `/api/*` への Bearer 認証。ログイン Cookie(`mm_auth`、7日、HttpOnly・Secure・SameSite=Strict)の署名にも使う。Cookie にキーは入らない。キーを変えると全 Cookie が無効になる |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
 
 受信 API の相手は、基名 `muse-vm` だけを `src/do.ts` に持ちます。
