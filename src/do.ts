@@ -76,6 +76,7 @@ export class MonitorGateway extends DurableObject<Env> {
   private lastError: string | null = null;
   private browseUrl: string | null = null;
   private peers: PeerCandidate[] = [];
+  private probing = false;
   private resolver = new PeerResolver(RECEIVER_NAME, RECEIVER_PORT);
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -377,6 +378,12 @@ export class MonitorGateway extends DurableObject<Env> {
   async publicStatus(): Promise<Response> {
     // 鍵なしでも状態を確かめられるよう、ノードが無ければ起動を始める(待たない。起動は1回にまとめられる)。
     if (!this.ipn) this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+    // ノードは動いているのに受信側が決まっていなければ、到達確認を裏で走らせる(結果は receiverProbes に出る)。
+    else if (this.lastStatus === "Running" && !this.resolver.cachedIp && !this.probing) {
+      const ipn = this.ipn;
+      this.probing = true;
+      this.ctx.waitUntil(this.resolveReceiver(ipn, true).catch(() => null).finally(() => { this.probing = false; }));
+    }
     return Response.json({
       node: this.ipn ? this.lastStatus : "not-started",
       authKeySource: this.authKeySource(),
@@ -384,6 +391,8 @@ export class MonitorGateway extends DurableObject<Env> {
       loginPending: this.lastStatus !== "Running" && Boolean(this.browseUrl),
       receiverCandidates: candidatesFor(this.peers, RECEIVER_NAME).length,
       receiverResolved: Boolean(this.resolver.cachedIp),
+      receiverPort: this.resolver.probePort,
+      receiverProbes: this.resolver.lastProbes,
     });
   }
 
