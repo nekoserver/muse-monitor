@@ -156,7 +156,7 @@ describe("GET /monitor/<section>", () => {
 
   it("starts exactly one node when many sections are requested at once", async () => {
     const gw = gateway();
-    const sections = ["status", "diag", "jobs", "pkgs", "vm", "procs", "ports", "git", "recent", "pending", "execlog", "sdkhealth", "sdkprofiles", "sdksessions", "sdkts"];
+    const sections = ["status", "diag", "jobs", "pkgs", "vm", "procs", "ports", "git", "recent", "pending", "execlog", "sdkhealth", "sdkprofiles", "sdksessions", "sdkts", "hooks"];
     const results = await Promise.all(sections.map((s) => get(gw, `/monitor/${s}`)));
     expect(results.map((r) => r.status)).toEqual(sections.map(() => 200));
     expect(nodes).toHaveLength(1);

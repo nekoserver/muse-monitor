@@ -57,7 +57,7 @@ const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const SECTIONS = new Set([
   "status", "diag", "jobs", "pkgs", "vm", "procs",
   "ports", "git", "recent", "pending", "execlog", "sdkhealth",
-  "sdkprofiles", "sdksessions", "sdkts",
+  "sdkprofiles", "sdksessions", "sdkts", "hooks",
 ]);
 
 /** How many extra probes, and how far apart, before answering receiver_not_found. */

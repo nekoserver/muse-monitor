@@ -114,6 +114,7 @@ const SECTIONS: Array<[string, string]> = [
   ["ports", "待ち受けポート"],
   ["git", "git 状態"],
   ["recent", "直近の完了ジョブ"],
+  ["hooks", "Hooks 状態"],
 ];
 
 const DASHBOARD = `<!DOCTYPE html>
@@ -162,7 +163,7 @@ const DASHBOARD = `<!DOCTYPE html>
     ["概要", ["status", "diag"]],
     ["SDK", ["sdkhealth", "sdkts", "sdkprofiles", "sdksessions"]],
     ["ジョブ", ["jobs", "pending", "execlog", "recent"]],
-    ["システム", ["vm", "procs", "ports", "pkgs", "git"]],
+    ["システム", ["vm", "procs", "ports", "pkgs", "git", "hooks"]],
   ];
   const TITLE = Object.fromEntries(SECTIONS);
   const data = {};   // name -> text

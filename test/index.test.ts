@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 
 // The set the DO accepts (src/do.ts SECTIONS); anything else is a 404 there.
-const DO_SECTIONS = ["status", "diag", "jobs", "pkgs", "vm", "procs", "ports", "git", "recent", "pending", "execlog", "sdkhealth", "sdkprofiles", "sdksessions", "sdkts"];
+const DO_SECTIONS = ["status", "diag", "jobs", "pkgs", "vm", "procs", "ports", "git", "recent", "pending", "execlog", "sdkhealth", "sdkprofiles", "sdksessions", "sdkts", "hooks"];
 
 // What can break: a route opens without a key, the bearer and HMAC keys get mixed up,
 // an old or replayed signature is accepted, a signature for one section unlocks another,
