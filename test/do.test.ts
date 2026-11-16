@@ -531,7 +531,7 @@ describe("node state persistence", () => {
   });
 });
 
-describe("DO recovery (SPEC REQ-SEC-026/027/028/036)", () => {
+describe("DO recovery (SPEC REQ-SEC-026/027/028)", () => {
   const SEEDED = { "ts-state": { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" } };
 
   it("discards a persisted state whose node never leaves NoState, and rejoins with the auth key", async () => {
@@ -569,47 +569,10 @@ describe("DO recovery (SPEC REQ-SEC-026/027/028/036)", () => {
     expect(nodes).toHaveLength(2);
   });
 
-  it("discards a persisted state whose resumed node falls back to interactive login although an auth key is set, and rejoins with the key (REQ-SEC-036)", async () => {
+  it("does not discard state when the node asks for login instead (browse URL present)", async () => {
     vi.useFakeTimers();
     const store = makeCtx(SEEDED);
     const gw = gateway(ENV, store.ctx);
-    let starts = 0;
-    onStart = (node) => { starts++; if (starts === 1) queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin")); };
-    onLogin = (node) => {
-      if (node === nodes[0]) queueMicrotask(() => node.callbacks!.notifyBrowseToURL("https://login.tailscale.com/a/abc123"));
-      else queueMicrotask(() => node.up());
-    };
-    const pending = get(gw, "/monitor/jobs");
-    await vi.advanceTimersByTimeAsync(60_000);
-    const res = await pending;
-    expect(res.status).toBe(200);
-    expect(nodes).toHaveLength(2);
-    // The fresh node is a first join again: the key is passed and login is called with it.
-    expect(nodes[1].config.authKey).toBe("tskey-auth-secret");
-    expect(nodes[1].login).toHaveBeenCalledWith("tskey-auth-secret");
-    const status = await (await get(gw, "/status")).json();
-    expect(status.lastError).toContain("discarded the persisted node state");
-  });
-
-  it("recovers at most once for the interactive-login fallback too: a fresh node that also asks for login is an error, not another discard (REQ-SEC-036)", async () => {
-    vi.useFakeTimers();
-    const store = makeCtx(SEEDED);
-    const gw = gateway(ENV, store.ctx);
-    onStart = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
-    onLogin = (node) => queueMicrotask(() => node.callbacks!.notifyBrowseToURL("https://login.tailscale.com/a/abc123"));
-    const pending = get(gw, "/monitor/jobs");
-    await vi.advanceTimersByTimeAsync(60_000);
-    await vi.advanceTimersByTimeAsync(60_000);
-    const res = await pending;
-    expect(res.status).toBe(502);
-    expect(await res.json()).toMatchObject({ error: "tailnet_unavailable" });
-    expect(nodes).toHaveLength(2);
-  });
-
-  it("does not discard state when the node asks for login and no auth key is set: interactive login is the only path (REQ-SEC-036)", async () => {
-    vi.useFakeTimers();
-    const store = makeCtx(SEEDED);
-    const gw = gateway({ TS_API_KEY: "receiver-key-secret" }, store.ctx);
     onStart = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
     onLogin = (node) => queueMicrotask(() => node.callbacks!.notifyBrowseToURL("https://login.tailscale.com/a/abc123"));
     const pending = get(gw, "/monitor/jobs");
@@ -617,8 +580,7 @@ describe("DO recovery (SPEC REQ-SEC-026/027/028/036)", () => {
     const res = await pending;
     expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body.message).toContain("waiting for interactive login approval");
-    expect(body.message).not.toContain("was not accepted");
+    expect(body.message).toContain("the auth key from TS_AUTHKEY was not accepted");
     expect(nodes).toHaveLength(1);
     expect(store.stored.get("ts-state")).toEqual(SEEDED["ts-state"]);
   });
