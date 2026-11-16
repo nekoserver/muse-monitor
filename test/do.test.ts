@@ -533,7 +533,7 @@ describe("node state persistence", () => {
 });
 
 describe("DO recovery (SPEC REQ-SEC-026/027/028)", () => {
-  const SEEDED = { "ts-state": { "_current-profile": "profile-1", "_machinekey": "mk" } };
+  const SEEDED = { "ts-state": { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" } };
 
   it("discards a persisted state whose node never leaves NoState, and rejoins with the auth key", async () => {
     vi.useFakeTimers();
@@ -584,6 +584,39 @@ describe("DO recovery (SPEC REQ-SEC-026/027/028)", () => {
     expect(body.message).toContain("the auth key from TS_AUTHKEY was not accepted");
     expect(nodes).toHaveLength(1);
     expect(store.stored.get("ts-state")).toEqual(SEEDED["ts-state"]);
+  });
+});
+
+describe("state integrity at load (SPEC REQ-SEC-033)", () => {
+  const BAD_STATES: Array<[string, unknown]> = [
+    ["the stored value is not an object", "garbage"],
+    ["the stored value is an array", ["_machinekey", "mk"]],
+    ["a value is not a string", { "_machinekey": 42 }],
+  ];
+
+  for (const [name, bad] of BAD_STATES) {
+    it(`discards the state before starting the node when ${name}, and joins fresh`, async () => {
+      const store = makeCtx({ "ts-state": bad });
+      const gw = gateway(ENV, store.ctx);
+      const res = await get(gw, "/monitor/jobs");
+      expect(res.status).toBe(200);
+      expect(nodes).toHaveLength(1);
+      // A first join, not a resume: the key is passed and login is called.
+      expect(nodes[0].config.authKey).toBe("tskey-auth-secret");
+      expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-secret");
+      const status = await (await get(gw, "/status")).json();
+      expect(status.lastError).toContain("discarded the persisted node state at load");
+    });
+  }
+
+  it("keeps a structurally intact state and resumes from it", async () => {
+    const store = makeCtx({ "ts-state": { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" } });
+    const gw = gateway(ENV, store.ctx);
+    onStart = (node) => queueMicrotask(() => node.up());
+    const res = await get(gw, "/monitor/jobs");
+    expect(res.status).toBe(200);
+    expect(nodes[0].config.authKey).toBeUndefined();
+    expect(nodes[0].login).not.toHaveBeenCalled();
   });
 });
 

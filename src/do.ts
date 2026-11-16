@@ -58,6 +58,20 @@ const RECEIVER_NAME = "muse-vm";
 const RECEIVER_PORT = 8090;
 
 const STATE_KEY = "ts-state";
+
+/**
+ * Structural integrity of the persisted node state (REQ-SEC-033): a plain
+ * object of string values. Anything else is the kind of torn write the
+ * asynchronous flush can leave behind, and must not be handed to the node.
+ * The check is deliberately limited to what is verifiable here — the
+ * client's internal key layout is not assumed; state that is structurally
+ * sound but semantically broken is the recovery's job (REQ-SEC-026).
+ */
+function stateIsIntact(stored: unknown): boolean {
+  if (typeof stored !== "object" || stored === null || Array.isArray(stored)) return false;
+  for (const v of Object.values(stored)) if (typeof v !== "string") return false;
+  return true;
+}
 const CLAIMS_KEY = "hmac-claims";
 /** How long an accepted HMAC signature is remembered: twice the ±300 s window. */
 const CLAIMS_TTL_S = 600;
@@ -127,7 +141,13 @@ export class MonitorGateway extends DurableObject<Env> {
   private async loadState(): Promise<void> {
     if (this.stateLoaded) return;
     const stored = await this.ctx.storage.get<Record<string, string>>(STATE_KEY);
-    if (stored) {
+    if (stored !== undefined && !stateIsIntact(stored)) {
+      // REQ-SEC-033: never start the node on a state that fails the
+      // integrity check. Discard it here, before any start, and join fresh
+      // — a broken state must surface as a rejoin, not as a wedged node.
+      this.lastError = "discarded the persisted node state at load: it failed the integrity check";
+      await this.ctx.storage.delete(STATE_KEY);
+    } else if (stored) {
       for (const [k, v] of Object.entries(stored)) this.state.set(k, v);
     }
     this.stateLoaded = true;
