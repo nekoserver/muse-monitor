@@ -7,8 +7,8 @@ muse-monitor が読む鍵の一覧。仕様は `SPEC.muse-monitor.security.harde
 
 | 名前 | 発行者 | 用途 | 消費側 | 設定場所 | ローテーション | 状態 |
 |------|--------|------|--------|----------|--------------|------|
-| `TS_AUTHKEY` | Tailscale | WASM ノードの tailnet 参加専用。receiver へは送らない | `src/do.ts`（MonitorGateway のノード参加） | muse-monitor の Worker シークレット | Tailscale 管理画面で新しい認証キーを発行し、シークレットを差し替える。旧キーは管理画面で失効させる | 移行待ち（未設定。未設定の間は参加が `TS_API_KEY` へフォールバックする） |
-| `TS_API_KEY` | 運用者（任意文字列） | receiver への Bearer 専用。tailnet 参加には使わない（フォールバック時を除く） | `src/do.ts`（receiver 呼び出し）、receiver 側は `receiver.py` | muse-monitor の Worker シークレットと、muse-vm の鍵ファイル `~/.config/muse-receiver.env`（両方に同じ値） | 両側の値を同時に差し替える。片側だけ変えると `receiver_unauthorized` になる | 設定済み（receiver 側の照合は有効化待ち。SPEC の移行手順を参照） |
+| `TS_AUTHKEY` | Tailscale | WASM ノードの tailnet 参加専用。receiver へは送らない | `src/do.ts`（MonitorGateway のノード参加） | muse-monitor の Worker シークレット | Tailscale 管理画面で新しい認証キーを発行し、シークレットを差し替える。旧キーは管理画面で失効させる | 設定済み（2026-11-16。`/health` の authKeySource は `TS_AUTHKEY`） |
+| `TS_API_KEY` | 運用者（任意文字列） | receiver への Bearer 専用。tailnet 参加には使わない（フォールバック時を除く） | `src/do.ts`（receiver 呼び出し）、receiver 側は `receiver.py` | muse-monitor の Worker シークレットと、muse-vm の鍵ファイル `~/.config/muse-receiver.env`（両方に同じ値） | 両側の値を同時に差し替える。片側だけ変えると `receiver_unauthorized` になる | 設定済み（receiver 側の照合は有効。2026-11-16 に有効化し、401/200 を実経路で確認した） |
 | `WORKER_API_KEY` | 運用者（任意文字列） | `/api/*` の Bearer 認証と、ログイン Cookie（`mm_auth`）の署名 | `src/index.ts`、`src/auth-cookie.ts` | muse-monitor の Worker シークレット | シークレットを差し替える。差し替えると既存のログイン Cookie は全て無効になり、利用者は再ログインが必要になる | 設定済み |
 | `MONITOR_HMAC_SECRET` | 運用者（任意文字列） | 本体 Worker からの `/api/hmac/*` 呼び出しの HMAC 署名 | `src/index.ts` | muse-monitor と本体 Worker の両方のシークレット（両方に同じ値） | 両側を同時に差し替える。片側だけ変えると本体 Worker の呼び出しが 401 になる | 設定済み |
 
@@ -29,6 +29,12 @@ muse-monitor が読む鍵の一覧。仕様は `SPEC.muse-monitor.security.harde
 | `MONITOR_HMAC_SECRET` | 未実施 | |
 
 自動ローテーションは実装しない（SPEC REQ-SEC-016）。実施したらこの表に日付を記録する。
+
+## 期限の記録（SPEC REQ-SEC-032）
+
+| 鍵 | 期限日 |
+|----|--------|
+| `TS_AUTHKEY` | 未記録（Tailscale 管理画面で確認してここへ記録する。期限が来ても、永続化状態が有効な間はノードは止まらない。鍵が必要になるのは再参加の時だけである） |
 
 ## アラートの分担
 

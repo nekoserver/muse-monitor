@@ -74,4 +74,9 @@ describe("key ledger (docs/KEY_LEDGER.md)", () => {
     expect(ledger).not.toMatch(/tskey-auth-[A-Za-z0-9]/);
     expect(ledger).not.toMatch(/[0-9a-f]{8} {0,2}指紋/);
   });
+
+  it("has an expiry record for TS_AUTHKEY (REQ-SEC-032)", () => {
+    expect(ledger).toContain("期限の記録");
+    expect(ledger).toMatch(/TS_AUTHKEY[^|]*\|[^|]*期限|TS_AUTHKEY[^\n]*期限日/);
+  });
 });
