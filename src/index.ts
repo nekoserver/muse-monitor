@@ -42,7 +42,7 @@ interface Env {
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 21;
+const MONITOR_REVISION = 22;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -141,7 +141,7 @@ const DASHBOARD = `<!DOCTYPE html>
   .login-ok { color: #7ee787; font-weight: bold; }
   .login-ng { color: #ff7b72; font-weight: bold; }
   button { margin-left: .5em; cursor: pointer; }
-  button:disabled { opacity: .45; cursor: not-allowed; }
+  #gated.off { opacity: .45; pointer-events: none; }
   .viewbtn.active, .tab.active { background: #2a4d2a; color: #fff; }
   .tabs { margin: 1em 0 0; border-bottom: 1px solid #2a4d2a; padding-bottom: .4em; }
   .layout { display: flex; gap: 1em; align-items: flex-start; }
@@ -164,15 +164,17 @@ const DASHBOARD = `<!DOCTYPE html>
 <p><label>API キー: <input type="password" id="key" size="32" autocomplete="off"></label>
 <button type="button" id="authbtn" onclick="authAction()">キー登録</button>
 <span class="meta" id="authmsg"></span>
-<span class="meta">キーで認証が通ると、このブラウザで7日間ログインしたままになります(キーは保存しません)</span>
-<button type="button" disabled onclick="loadAll()">全て取得</button>
+<span class="meta">キーで認証が通ると、このブラウザで7日間ログインしたままになります(キーは保存しません)</span></p>
+<div id="gated" class="off" inert>
+<p><button type="button" onclick="loadAll()">全て取得</button>
 <span style="margin-left:1em">表示:
-<button type="button" class="viewbtn" data-v="tabs" disabled onclick="setView('tabs')">タブ</button>
-<button type="button" class="viewbtn" data-v="tree" disabled onclick="setView('tree')">ツリー</button>
-<button type="button" class="viewbtn" data-v="panel" disabled onclick="setView('panel')">サイドパネル</button>
+<button type="button" class="viewbtn" data-v="tabs" onclick="setView('tabs')">タブ</button>
+<button type="button" class="viewbtn" data-v="tree" onclick="setView('tree')">ツリー</button>
+<button type="button" class="viewbtn" data-v="panel" onclick="setView('panel')">サイドパネル</button>
 </span></p>
 <pre id="nodestat">ノード状態: （未取得）</pre>
 <div id="view"></div>
+</div>
 <script>
   const SECTIONS = ${JSON.stringify(SECTIONS)};
   const CATS = [
@@ -193,14 +195,13 @@ const DASHBOARD = `<!DOCTYPE html>
     const a = document.getElementById('authstat');
     a.className = v ? 'login-ok' : 'login-ng';
     a.textContent = 'このブラウザのキー認証: ' + (v ? '認証済み' : '未認証');
-    applyAuthToButtons();
+    applyAuthGate();
   }
-  // 未認証の間は、キー登録ボタン以外のボタンを全て押せなくする(REQ-SEC-040)。
-  function applyAuthToButtons() {
-    for (const b of document.querySelectorAll('button')) {
-      if (b.id === 'authbtn') continue;
-      b.disabled = !loggedIn;
-    }
+  // 未認証の間は、キー入力窓より下のセクション全体をグレーアウトして操作できなくする(REQ-SEC-040)。
+  function applyAuthGate() {
+    const g = document.getElementById('gated');
+    g.classList.toggle('off', !loggedIn);
+    g.inert = !loggedIn;
   }
   // Cookie だけで認証が通るかを見る(キーは送らない)。通ればログイン中である。
   async function probeLogin() {
@@ -310,7 +311,6 @@ const DASHBOARD = `<!DOCTYPE html>
       root.innerHTML = '<div class="layout"><div class="side">' + side +
         '</div><div class="main">' + SECTIONS.map(([n]) => card(n)).join('') + '</div></div>';
     }
-    applyAuthToButtons();
   }
   function setView(v) { view = v; render(); }
   render();
