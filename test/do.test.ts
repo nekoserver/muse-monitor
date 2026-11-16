@@ -145,15 +145,14 @@ describe("GET /monitor/<section>", () => {
     expect(nodes).toHaveLength(0);
   });
 
-  it("while TS_AUTHKEY is unset, joins with TS_API_KEY (migration fallback) and reports the source", async () => {
+  it("with TS_AUTHKEY unset, TS_API_KEY is never used to join (fallback removed): no key is passed to the node or to login", async () => {
     const gw = gateway({ TS_API_KEY: "tskey-auth-secret" });
     const res = await get(gw, "/monitor/jobs");
     expect(res.status).toBe(200);
-    expect(nodes[0].config).toMatchObject({ authKey: "tskey-auth-secret" });
-    expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-secret");
-    expect(nodes[0].requests[1].headers).toEqual([["Authorization", "Bearer tskey-auth-secret"]]);
-    expect(await (await get(gw, "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_API_KEY" });
-    expect(await (await get(gw, "/public-status")).json()).toMatchObject({ authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY" });
+    expect(nodes[0].config.authKey).toBeUndefined();
+    expect(nodes[0].login).not.toHaveBeenCalledWith("tskey-auth-secret");
+    expect(await (await get(gw, "/status")).json()).toMatchObject({ authKeyConfigured: false, authKeySource: null });
+    expect(await (await get(gw, "/public-status")).json()).toMatchObject({ authKeySource: null, receiverKeySource: "TS_API_KEY" });
   });
 
   it("does not send a request with an empty or undefined Bearer when neither key is set", async () => {
@@ -339,9 +338,9 @@ describe("node start failures", () => {
     expect(await (await get(gw, "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_AUTHKEY", loginUrl: null });
   });
 
-  it("reports authKeyConfigured from TS_AUTHKEY before the node starts, with the TS_API_KEY fallback", async () => {
+  it("reports authKeyConfigured from TS_AUTHKEY only: TS_API_KEY alone does not count as a join key", async () => {
     expect(await (await get(gateway({ TS_AUTHKEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_AUTHKEY" });
-    expect(await (await get(gateway({ TS_API_KEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_API_KEY" });
+    expect(await (await get(gateway({ TS_API_KEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: false, authKeySource: null });
     expect(await (await get(gateway({ TS_AUTHKEY: "k", TS_API_KEY: "r" }), "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_AUTHKEY" });
     expect(await (await get(gateway({ TS_API_KEY: "" }), "/status")).json()).toMatchObject({ authKeyConfigured: false, authKeySource: null });
     expect(await (await get(gateway({}), "/status")).json()).toMatchObject({ authKeyConfigured: false, authKeySource: null });
@@ -394,9 +393,9 @@ describe("node start failures", () => {
 
 describe("GET /public-status (for /health, no secrets)", () => {
   it("starts the node in the background, so the state can be checked without a key", async () => {
-    const gw = gateway({ TS_API_KEY: "k" });
+    const gw = gateway({ TS_AUTHKEY: "join-key", TS_API_KEY: "k" });
     const first = await (await get(gw, "/public-status")).json();
-    expect(first).toMatchObject({ authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY", loginPending: false });
+    expect(first).toMatchObject({ authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false });
     await new Promise((r) => setTimeout(r, 0));
     expect(nodes).toHaveLength(1);
     expect(await (await get(gw, "/public-status")).json()).toMatchObject({ node: "Running", receiverCandidates: 1 });

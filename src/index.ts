@@ -28,7 +28,7 @@ interface Env {
   WORKER_API_KEY: string;
   /** TS_AUTHKEY: Tailscale-issued auth key; the DO joins the tailnet with it, and sends it nowhere else. */
   TS_AUTHKEY?: string;
-  /** TS_API_KEY: operator-chosen receiver key; the DO presents it to the receiver as the Bearer, and uses it nowhere else (join fallback aside). */
+  /** TS_API_KEY: operator-chosen receiver key; the DO presents it to the receiver as the Bearer, and uses it nowhere else. */
   TS_API_KEY?: string;
   MONITOR_HMAC_SECRET: string;
   /** wrangler.toml の [version_metadata]。デプロイした版のIDと時刻。 */
@@ -42,7 +42,7 @@ interface Env {
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 13;
+const MONITOR_REVISION = 14;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";

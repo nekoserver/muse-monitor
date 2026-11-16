@@ -66,7 +66,7 @@ Durable Object (MonitorGateway)
 | `revision` | コードの版の目印。2以上なら netmap の読み違いの修正(#7)が入っている。3で `node` を追加。9で鍵の役割分離・HMAC リプレイ防止・構造化監査ログ |
 | `version` | `[version_metadata]` の版のID・タグ・デプロイ時刻。無ければ `null` |
 | `node.node` | ノードの状態(`not-started`・`NeedsLogin`・`Running` など) |
-| `node.authKeySource` | ノードの参加に使った鍵のシークレット名(`TS_AUTHKEY` / `TS_API_KEY` / `null`)。`TS_API_KEY` なら移行フォールバック中 |
+| `node.authKeySource` | ノードの参加に使う鍵のシークレット名(`TS_AUTHKEY` / `null`) |
 | `node.receiverKeySource` | 受信側へ送る鍵のシークレット名 |
 | `node.loginPending` | 対話ログインの承認待ちか(URLは `/api/status` で鍵を付けて見る) |
 | `node.receiverCandidates` | netmap に見えている muse-vm(-N) の数。0 なら muse-vm がピアに見えていない |
@@ -91,7 +91,7 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 
 | 名前              | 用途                                   |
 |-------------------|----------------------------------------|
-| `TS_AUTHKEY`      | Tailscale が発行する認証キー。WASM ノードの tailnet 参加専用で、受信 API へは送らない。未設定の間は参加が `TS_API_KEY` へフォールバックし、その旨が `authKeySource` に出る |
+| `TS_AUTHKEY`      | Tailscale が発行する認証キー。WASM ノードの tailnet 参加専用で、受信 API へは送らない。未設定だと無人の参加はできない（対話ログインになる） |
 | `TS_API_KEY`      | 運用者が決める任意文字列。受信 API への Bearer 専用。受信側の鍵ファイル（muse-vm の `~/.config/muse-receiver.env`）と同じ値を置く。未設定なら受信 API は呼ばない |
 | `WORKER_API_KEY`  | `/api/*` への Bearer 認証。ログイン Cookie(`mm_auth`、7日、HttpOnly・Secure・SameSite=Strict)の署名にも使う。Cookie にキーは入らない。キーを変えると全 Cookie が無効になる |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |

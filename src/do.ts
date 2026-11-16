@@ -33,11 +33,10 @@ import {
 
 interface Env {
   // TS_AUTHKEY: the Tailscale-issued auth key, used only to join the tailnet.
-  // Optional: without it the node falls back to TS_API_KEY for the join
-  // (migration fallback, SPEC REQ-SEC-005) and ultimately to interactive
-  // login — the operator opens the login URL (exposed in /api/status) and
-  // approves the node once. With it, joining is unattended but the
-  // key expires (90 days max) and a lost DO state then needs a new key.
+  // Optional: without it the node cannot join unattended and falls back to
+  // interactive login — the operator opens the login URL (exposed in
+  // /api/status) and approves the node once. With it, joining is unattended
+  // but the key expires (90 days max) and a lost DO state then needs a new key.
   TS_AUTHKEY?: string;
   // TS_API_KEY: the operator-chosen receiver key, used only as the Bearer
   // presented to the receiver. It is never a Tailscale key.
@@ -118,19 +117,17 @@ export class MonitorGateway extends DurableObject<Env> {
   /**
    * Join key, role-separated (SPEC.muse-monitor.security.hardening):
    * TS_AUTHKEY (Tailscale-issued) is the join key and nothing else.
-   * While TS_AUTHKEY is unset, the migration fallback joins with TS_API_KEY
-   * and says so through authKeySource; the fallback is removed once the
-   * deployed node reports TS_AUTHKEY. TS_API_KEY itself is only ever the
-   * receiver Bearer (see receiverKey).
+   * TS_API_KEY is only ever the receiver Bearer (see receiverKey) and is
+   * never used to join — the migration fallback that did so was removed
+   * once the deployed node reported TS_AUTHKEY (REQ-SEC-005).
    */
-  private authKey(): { value: string; source: "TS_AUTHKEY" | "TS_API_KEY" } | null {
+  private authKey(): { value: string; source: "TS_AUTHKEY" } | null {
     if (this.env.TS_AUTHKEY) return { value: this.env.TS_AUTHKEY, source: "TS_AUTHKEY" };
-    if (this.env.TS_API_KEY) return { value: this.env.TS_API_KEY, source: "TS_API_KEY" };
     return null;
   }
 
   /** Which secret the join key comes from (never the value). */
-  private authKeySource(): "TS_AUTHKEY" | "TS_API_KEY" | null {
+  private authKeySource(): "TS_AUTHKEY" | null {
     return this.authKey()?.source ?? null;
   }
 
