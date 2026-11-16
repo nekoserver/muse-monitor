@@ -32,10 +32,15 @@ import {
 } from "./ts-discover";
 
 interface Env {
-  // Optional: without it the node falls back to interactive login —
-  // the operator opens the login URL (exposed in /api/status) and
+  // TS_AUTHKEY: the Tailscale-issued auth key, used only to join the tailnet.
+  // Optional: without it the node falls back to TS_API_KEY for the join
+  // (migration fallback, SPEC REQ-SEC-005) and ultimately to interactive
+  // login — the operator opens the login URL (exposed in /api/status) and
   // approves the node once. With it, joining is unattended but the
   // key expires (90 days max) and a lost DO state then needs a new key.
+  TS_AUTHKEY?: string;
+  // TS_API_KEY: the operator-chosen receiver key, used only as the Bearer
+  // presented to the receiver. It is never a Tailscale key.
   TS_API_KEY?: string;
 }
 
@@ -53,6 +58,9 @@ const RECEIVER_NAME = "muse-vm";
 const RECEIVER_PORT = 8090;
 
 const STATE_KEY = "ts-state";
+const CLAIMS_KEY = "hmac-claims";
+/** How long an accepted HMAC signature is remembered: twice the ±300 s window. */
+const CLAIMS_TTL_S = 600;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const SECTIONS = new Set([
   "status", "diag", "jobs", "pkgs", "vm", "procs",
@@ -74,6 +82,8 @@ export class MonitorGateway extends DurableObject<Env> {
   private pendingPanic: string | null = null;
   private state = new Map<string, string>();
   private stateLoaded = false;
+  /** Accepted HMAC signatures (sig -> unix ts), for replay prevention. */
+  private claims: Map<string, number> | null = null;
   private flushPending: Promise<void> | null = null;
   private lastStatus = "not-started";
   private lastError: string | null = null;
@@ -87,18 +97,22 @@ export class MonitorGateway extends DurableObject<Env> {
   }
 
   /**
-   * The one key, TS_API_KEY: the node joins the tailnet with it and presents
-   * the same value to the receiver as the Bearer (the receiver reads
-   * TS_API_KEY too). Without it the node falls back to interactive login and
-   * /monitor answers receiver_key_missing.
+   * Join key, role-separated (SPEC.muse-monitor.security.hardening):
+   * TS_AUTHKEY (Tailscale-issued) is the join key and nothing else.
+   * While TS_AUTHKEY is unset, the migration fallback joins with TS_API_KEY
+   * and says so through authKeySource; the fallback is removed once the
+   * deployed node reports TS_AUTHKEY. TS_API_KEY itself is only ever the
+   * receiver Bearer (see receiverKey).
    */
-  private authKey(): string | undefined {
-    return this.env.TS_API_KEY || undefined;
+  private authKey(): { value: string; source: "TS_AUTHKEY" | "TS_API_KEY" } | null {
+    if (this.env.TS_AUTHKEY) return { value: this.env.TS_AUTHKEY, source: "TS_AUTHKEY" };
+    if (this.env.TS_API_KEY) return { value: this.env.TS_API_KEY, source: "TS_API_KEY" };
+    return null;
   }
 
-  /** Which secret the key comes from (never the value). */
-  private authKeySource(): "TS_API_KEY" | null {
-    return this.env.TS_API_KEY ? "TS_API_KEY" : null;
+  /** Which secret the join key comes from (never the value). */
+  private authKeySource(): "TS_AUTHKEY" | "TS_API_KEY" | null {
+    return this.authKey()?.source ?? null;
   }
 
   private receiverKey(): { value: string; source: "TS_API_KEY" } | null {
@@ -185,8 +199,9 @@ export class MonitorGateway extends DurableObject<Env> {
     const go = new Go();
     const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
     void go.run(instance);
+    const auth = this.authKey();
     const created = newIPN({
-      ...(this.authKey() ? { authKey: this.authKey() } : {}),
+      ...(auth ? { authKey: auth.value } : {}),
       hostname: NODE_HOSTNAME,
       ephemeral: false,
       logUpload: false,
@@ -224,15 +239,19 @@ export class MonitorGateway extends DurableObject<Env> {
     };
     ipn.run(callbacks);
     this.ipn = ipn;
-    ipn.login(this.authKey());
+    ipn.login(auth?.value);
     return ipn;
   }
 
-  /** Durable Object entrypoint: /status and /monitor/<section>. */
+  /** Durable Object entrypoint: /status, /monitor/<section>, /hmac-claim. */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/status") return this.status();
     if (url.pathname === "/public-status") return this.publicStatus();
+    if (url.pathname === "/hmac-claim") {
+      if (request.method !== "POST") return Response.json({ error: "not found" }, { status: 404 });
+      return this.hmacClaim(request);
+    }
     if (url.pathname.startsWith("/monitor/")) {
       const section = url.pathname.slice("/monitor/".length);
       if (!SECTIONS.has(section)) {
@@ -400,6 +419,43 @@ export class MonitorGateway extends DurableObject<Env> {
       method: "GET",
       headers: [["Authorization", `Bearer ${bearer}`]],
     });
+  }
+
+  private async loadClaims(): Promise<Map<string, number>> {
+    if (this.claims) return this.claims;
+    const stored = await this.ctx.storage.get<Record<string, number>>(CLAIMS_KEY);
+    this.claims = new Map(Object.entries(stored ?? {}));
+    return this.claims;
+  }
+
+  /**
+   * Record one accepted HMAC signature (SPEC REQ-SEC-011/012): the same
+   * signature is claimable only once. The check-and-set after the load is
+   * synchronous, so concurrent claims cannot both win. Claims older than
+   * CLAIMS_TTL_S (relative to the incoming timestamp) are pruned.
+   */
+  private async hmacClaim(request: Request): Promise<Response> {
+    let body: { sig?: unknown; ts?: unknown };
+    try {
+      body = (await request.json()) as { sig?: unknown; ts?: unknown };
+    } catch {
+      return Response.json({ error: "bad request" }, { status: 400 });
+    }
+    const { sig, ts } = body;
+    if (typeof sig !== "string" || !/^[0-9a-f]{64}$/.test(sig) || typeof ts !== "number" || !Number.isFinite(ts)) {
+      return Response.json({ error: "bad request" }, { status: 400 });
+    }
+    const claims = await this.loadClaims();
+    for (const [s, t] of claims) if (t < ts - CLAIMS_TTL_S) claims.delete(s);
+    if (claims.has(sig)) return Response.json({ ok: false });
+    claims.set(sig, ts);
+    const flushed = this.ctx.storage
+      .put(CLAIMS_KEY, Object.fromEntries(claims))
+      .catch((err: unknown) => {
+        this.lastError = `claim flush failed: ${String(err)}`;
+      });
+    this.ctx.waitUntil(flushed);
+    return Response.json({ ok: true });
   }
 
   /** Node status for diagnostics (no secrets). */

@@ -10,18 +10,25 @@
  * dashboard/ask.cgi flow on the host, approval is host-side only
  * (see lib/muse/SPEC.md). This Worker only looks.
  *
- * Auth (keys are separate and never mixed):
+ * Auth (keys are separate and never mixed — see docs/KEY_LEDGER.md):
  *   - callers present WORKER_API_KEY (Bearer) to /api/*; a Bearer request to
  *     /api/status also sets a login cookie (7 days, holds no key) that opens
  *     /api/* by itself (src/auth-cookie.ts)
- *   - one key, TS_API_KEY: the WASM node joins the tailnet with it and the
- *     DO presents the same value to the receiver; interactive login (approve
- *     the loginUrl from /api/status) only when it is not set
+ *   - TS_AUTHKEY (Tailscale-issued) only joins the tailnet; TS_API_KEY
+ *     (operator-chosen) is only the Bearer the DO presents to the receiver.
+ *     While TS_AUTHKEY is unset the join falls back to TS_API_KEY and says
+ *     so (authKeySource); interactive login only when neither is set
+ *   - the main Worker signs /api/hmac/* with MONITOR_HMAC_SECRET; a
+ *     signature is accepted only once (replay is refused), and every auth
+ *     decision on /api/* and /api/hmac/* emits one structured audit line
  */
 
 interface Env {
   MONITOR_GATEWAY: DurableObjectNamespace;
   WORKER_API_KEY: string;
+  /** TS_AUTHKEY: Tailscale-issued auth key; the DO joins the tailnet with it, and sends it nowhere else. */
+  TS_AUTHKEY?: string;
+  /** TS_API_KEY: operator-chosen receiver key; the DO presents it to the receiver as the Bearer, and uses it nowhere else (join fallback aside). */
   TS_API_KEY?: string;
   MONITOR_HMAC_SECRET: string;
   /** wrangler.toml の [version_metadata]。デプロイした版のIDと時刻。 */
@@ -31,9 +38,10 @@ interface Env {
 /**
  * コードの版の目印(/health で返す)。どの修正が本番に入っているかを、鍵なしで見分けるため。
  * 2: netmapの読み違いの修正・鍵のフォールバック(nekoserver/muse-monitor#7)。3: /health にノードの公開状態を出す。
+ * 9: 鍵の役割分離(TS_AUTHKEY=参加専用、TS_API_KEY=receiver専用)、HMACリプレイ防止、構造化監査ログ(SPEC.muse-monitor.security.hardening)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 8;
+const MONITOR_REVISION = 9;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -237,6 +245,72 @@ const DASHBOARD = `<!DOCTYPE html>
 </script>
 </body></html>`;
 
+type AuditAuth = "bearer" | "cookie" | "hmac" | "none";
+type AuditResult = "accepted" | "rejected" | "replay" | "unavailable";
+
+/**
+ * One structured audit line per auth decision (SPEC REQ-SEC-014/015).
+ * Never carries a key value, a cookie value, or a signature — only the
+ * route, the auth kind, the outcome, and (for HMAC) the section name.
+ */
+function audit(route: string, auth: AuditAuth, result: AuditResult, section?: string): void {
+  console.log(JSON.stringify({
+    type: "audit",
+    ts: new Date().toISOString(),
+    route,
+    auth,
+    result,
+    ...(section ? { section } : {}),
+  }));
+}
+
+/**
+ * Claim an accepted HMAC signature in the Durable Object, so the same
+ * signature cannot be replayed inside its validity window
+ * (SPEC REQ-SEC-011/013). "unavailable" fails closed.
+ */
+async function claimSignature(env: Env, sig: string, ts: number): Promise<"claimed" | "replay" | "unavailable"> {
+  try {
+    const stub = env.MONITOR_GATEWAY.get(env.MONITOR_GATEWAY.idFromName("monitor-gateway"));
+    const res = await stub.fetch("http://do/hmac-claim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sig, ts }),
+    });
+    if (res.status !== 200) return "unavailable";
+    const body = (await res.json()) as { ok?: unknown };
+    if (body.ok === true) return "claimed";
+    if (body.ok === false) return "replay";
+    return "unavailable";
+  } catch {
+    return "unavailable";
+  }
+}
+
+/**
+ * HMAC gate for /api/hmac/*: signature check, then the one-time claim.
+ * Returns null when the request may proceed, else the refusal response.
+ */
+async function hmacGate(request: Request, env: Env, section: string, route: string): Promise<Response | null> {
+  if (!(await hmacMatches(request, env.MONITOR_HMAC_SECRET, section))) {
+    audit(route, "hmac", "rejected", section);
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const sig = (request.headers.get("X-Muse-Signature") ?? "").toLowerCase();
+  const ts = Number(request.headers.get("X-Muse-Timestamp"));
+  const claim = await claimSignature(env, sig, ts);
+  if (claim === "replay") {
+    audit(route, "hmac", "replay", section);
+    return Response.json({ error: "replay" }, { status: 401 });
+  }
+  if (claim === "unavailable") {
+    audit(route, "hmac", "unavailable", section);
+    return Response.json({ error: "replay_check_unavailable" }, { status: 503 });
+  }
+  audit(route, "hmac", "accepted", section);
+  return null;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -273,8 +347,10 @@ export default {
     if (url.pathname === "/api/status" && request.method === "GET") {
       const byKey = bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY);
       if (!byKey && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
+        audit("/api/status", "none", "rejected");
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
+      audit("/api/status", byKey ? "bearer" : "cookie", "accepted");
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
       const stub = env.MONITOR_GATEWAY.get(id);
       const res = await stub.fetch("http://do/status");
@@ -286,9 +362,8 @@ export default {
     }
 
     if (url.pathname === "/api/hmac/status" && request.method === "GET") {
-      if (!(await hmacMatches(request, env.MONITOR_HMAC_SECRET, "status"))) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
+      const gate = await hmacGate(request, env, "status", url.pathname);
+      if (gate) return gate;
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
       const stub = env.MONITOR_GATEWAY.get(id);
       return stub.fetch("http://do/status");
@@ -296,19 +371,20 @@ export default {
 
     if (url.pathname.startsWith("/api/hmac/monitor/") && request.method === "GET") {
       const section = url.pathname.slice("/api/hmac/monitor/".length);
-      if (!(await hmacMatches(request, env.MONITOR_HMAC_SECRET, section))) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
+      const gate = await hmacGate(request, env, section, url.pathname);
+      if (gate) return gate;
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
       const stub = env.MONITOR_GATEWAY.get(id);
       return stub.fetch(`http://do/monitor/${section}`);
     }
 
     if (url.pathname.startsWith("/api/monitor/") && request.method === "GET") {
-      if (!bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY)
-        && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
+      const byKey = bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY);
+      if (!byKey && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
+        audit(url.pathname, "none", "rejected");
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
+      audit(url.pathname, byKey ? "bearer" : "cookie", "accepted");
       const section = url.pathname.slice("/api/monitor/".length);
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
       const stub = env.MONITOR_GATEWAY.get(id);

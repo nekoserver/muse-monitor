@@ -37,7 +37,7 @@ GET /monitor/<section>
 ## section 一覧
 
 status / diag / jobs / pkgs / vm / procs / ports / git / recent /
-pending / execlog / sdkhealth / sdkprofiles / sdksessions / sdkts
+pending / execlog / sdkhealth / sdkprofiles / sdksessions / sdkts / hooks
 
 各 section はホスト側の読み取り専用スクリプト1本に対応する。
 書き込み・実行系のエンドポイントはモニタ用には存在しない。
@@ -49,3 +49,5 @@ pending / execlog / sdkhealth / sdkprofiles / sdksessions / sdkts
   同時に変更すること
 - 認証方式を変える場合は、受信側と Worker のシークレット
   （`TS_API_KEY`）を合わせて変更すること
+- `TS_AUTHKEY` は受信側の鍵ではない（WASM ノードの tailnet 参加専用）。
+  受信側が Bearer として受け付けるのは `TS_API_KEY` のみ

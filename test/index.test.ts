@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 
 // The set the DO accepts (src/do.ts SECTIONS); anything else is a 404 there.
@@ -18,11 +18,12 @@ function makeEnv() {
   const ids: string[] = [];
   const env = {
     WORKER_API_KEY,
+    TS_AUTHKEY: "tskey-auth-other",
     TS_API_KEY: "ts-key",
     MONITOR_HMAC_SECRET,
     MONITOR_GATEWAY: {
       idFromName: (name: string) => { ids.push(name); return name; },
-      get: () => ({ fetch: async (url: string) => { calls.push(url); return Response.json({ from: "do", url }); } }),
+      get: () => ({ fetch: async (url: string) => { calls.push(url); if (url.includes("hmac-claim")) return Response.json({ ok: true }); return Response.json({ from: "do", url }); } }),
     },
   };
   return { env: env as never, calls, ids };
@@ -36,12 +37,12 @@ const sign = (section: string, ts = Math.floor(Date.now() / 1000), secret = MONI
   "X-Muse-Signature": createHmac("sha256", secret).update(`${ts}.${section}`).digest("hex"),
 });
 
-afterEach(() => { vi.useRealTimers(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("open routes", () => {
   it("GET /health needs no key and shows the code revision, the deployed version and the node's public state", async () => {
     const { env, calls } = makeEnv();
-    const publicState = { node: "Running", authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true };
+    const publicState = { node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true };
     (env as Record<string, unknown>).MONITOR_GATEWAY = {
       idFromName: (name: string) => name,
       get: () => ({ fetch: async (url: string) => { calls.push(url); return Response.json(publicState); } }),
@@ -50,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 8,
+      status: "ok", worker: "muse-monitor", revision: 9,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -63,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 8, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 9, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -206,7 +207,7 @@ describe("HMAC routes", () => {
     const upper = sign("git");
     upper["X-Muse-Signature"] = upper["X-Muse-Signature"].toUpperCase();
     expect((await worker.fetch(call("/api/hmac/monitor/git", upper), env)).status).toBe(200);
-    expect(calls).toEqual(["http://do/status", "http://do/monitor/diag", "http://do/monitor/git"]);
+    expect(calls).toEqual(["http://do/hmac-claim", "http://do/status", "http://do/hmac-claim", "http://do/monitor/diag", "http://do/hmac-claim", "http://do/monitor/git"]);
   });
 
   it("accepts up to 300 s of clock skew in both directions and nothing beyond", async () => {
@@ -242,6 +243,112 @@ describe("HMAC routes", () => {
     (env as { MONITOR_HMAC_SECRET: string }).MONITOR_HMAC_SECRET = "";
     expect((await worker.fetch(call("/api/hmac/status", sign("status", undefined, "")), env)).status).toBe(401);
     expect(calls).toEqual([]);
+  });
+
+  it("accepts a signature only once: a replay is 401 {error: replay} and is not forwarded again (REQ-SEC-011)", async () => {
+    const { env, calls } = makeEnv();
+    const seen = new Set<string>();
+    (env as Record<string, unknown>).MONITOR_GATEWAY = {
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async (url: string, init?: { body?: string }) => {
+        calls.push(url);
+        if (url.includes("hmac-claim")) {
+          const { sig } = JSON.parse(init?.body ?? "{}") as { sig: string };
+          if (seen.has(sig)) return Response.json({ ok: false });
+          seen.add(sig);
+          return Response.json({ ok: true });
+        }
+        return Response.json({ from: "do", url });
+      } }),
+    };
+    const headers = sign("status");
+    expect((await worker.fetch(call("/api/hmac/status", headers), env)).status).toBe(200);
+    const second = await worker.fetch(call("/api/hmac/status", headers), env);
+    expect(second.status).toBe(401);
+    expect(await second.json()).toEqual({ error: "replay" });
+    expect(calls.filter((u) => u === "http://do/status")).toHaveLength(1);
+    // A different section with its own fresh signature still works.
+    expect((await worker.fetch(call("/api/hmac/monitor/diag", sign("diag")), env)).status).toBe(200);
+  });
+
+  it("fails closed with 503 when the replay claim cannot be checked (REQ-SEC-013)", async () => {
+    const { env, calls } = makeEnv();
+    (env as Record<string, unknown>).MONITOR_GATEWAY = {
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async (url: string) => { calls.push(url); if (url.includes("hmac-claim")) throw new Error("do down"); return Response.json({ from: "do", url }); } }),
+    };
+    const res = await worker.fetch(call("/api/hmac/status", sign("status")), env);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "replay_check_unavailable" });
+    expect(calls).toEqual(["http://do/hmac-claim"]);
+  });
+});
+
+describe("structured audit log (REQ-SEC-014/015)", () => {
+  let lines: string[];
+  beforeEach(() => {
+    lines = [];
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(" ")); });
+  });
+  const audits = () => lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+
+  it("logs one JSON line per bearer decision, accepted and rejected", async () => {
+    const { env } = makeEnv();
+    await worker.fetch(call("/api/status", { Authorization: `Bearer ${WORKER_API_KEY}` }), env);
+    await worker.fetch(call("/api/monitor/jobs", { Authorization: "Bearer wrong" }), env);
+    expect(audits()).toEqual([
+      expect.objectContaining({ type: "audit", route: "/api/status", auth: "bearer", result: "accepted" }),
+      expect.objectContaining({ type: "audit", route: "/api/monitor/jobs", auth: "none", result: "rejected" }),
+    ]);
+    for (const entry of audits()) expect(typeof entry.ts).toBe("string");
+  });
+
+  it("logs cookie authentication as auth=cookie", async () => {
+    const { env } = makeEnv();
+    const login = await worker.fetch(call("/api/status", { Authorization: `Bearer ${WORKER_API_KEY}` }), env);
+    const cookie = (login.headers.get("Set-Cookie") ?? "").split(";")[0];
+    lines.length = 0;
+    await worker.fetch(call("/api/monitor/jobs", { Cookie: cookie }), env);
+    expect(audits()).toEqual([expect.objectContaining({ type: "audit", route: "/api/monitor/jobs", auth: "cookie", result: "accepted" })]);
+  });
+
+  it("logs HMAC decisions with the section, and a replay as result=replay", async () => {
+    const { env } = makeEnv();
+    const seen = new Set<string>();
+    (env as Record<string, unknown>).MONITOR_GATEWAY = {
+      idFromName: (name: string) => name,
+      get: () => ({ fetch: async (url: string, init?: { body?: string }) => {
+        if (url.includes("hmac-claim")) {
+          const { sig } = JSON.parse(init?.body ?? "{}") as { sig: string };
+          if (seen.has(sig)) return Response.json({ ok: false });
+          seen.add(sig);
+          return Response.json({ ok: true });
+        }
+        return Response.json({ from: "do", url });
+      } }),
+    };
+    const headers = sign("diag");
+    await worker.fetch(call("/api/hmac/monitor/diag", headers), env);
+    await worker.fetch(call("/api/hmac/monitor/diag", headers), env);
+    await worker.fetch(call("/api/hmac/status", { "X-Muse-Timestamp": "1", "X-Muse-Signature": "0".repeat(64) }), env);
+    expect(audits()).toEqual([
+      expect.objectContaining({ type: "audit", route: "/api/hmac/monitor/diag", auth: "hmac", result: "accepted", section: "diag" }),
+      expect.objectContaining({ type: "audit", route: "/api/hmac/monitor/diag", auth: "hmac", result: "replay", section: "diag" }),
+      expect.objectContaining({ type: "audit", route: "/api/hmac/status", auth: "hmac", result: "rejected", section: "status" }),
+    ]);
+  });
+
+  it("never logs a key value, a cookie value, or a signature", async () => {
+    const { env } = makeEnv();
+    const headers = sign("status");
+    await worker.fetch(call("/api/status", { Authorization: `Bearer ${WORKER_API_KEY}` }), env);
+    await worker.fetch(call("/api/hmac/status", headers), env);
+    await worker.fetch(call("/api/status", { Authorization: "Bearer wrong" }), env);
+    const all = lines.join("\n");
+    expect(all).not.toContain(WORKER_API_KEY);
+    expect(all).not.toContain(MONITOR_HMAC_SECRET);
+    expect(all).not.toContain(headers["X-Muse-Signature"]);
+    expect(all).not.toContain("mm_auth=");
   });
 });
 

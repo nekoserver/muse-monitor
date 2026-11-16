@@ -22,11 +22,8 @@ tag = "v1"
 new_sqlite_classes = ["MonitorGateway"]
 
 # Secrets (set by the operator; never committed):
-#   TS_API_KEY       - the one key: the WASM node joins the tailnet with it
-#                      and sends the same value to the receiver as the
-#                      Bearer (the receiver reads TS_API_KEY too). If unset,
-#                      the node uses interactive login (approve the loginUrl
-#                      shown by /api/status).
-#   WORKER_API_KEY   - Bearer key callers must present to /api/*
-#   MONITOR_HMAC_SECRET - shared secret for the main Worker's HMAC-signed
-#                      calls to /api/hmac/* (set the same value there)
+#   TS_AUTHKEY - Tailscale-issued auth key; the WASM node joins the tailnet with it (join only, never sent to the receiver)
+#   TS_API_KEY - operator-chosen receiver key; the DO presents it to the receiver as the Bearer (receiver only). The receiver reads the same value from its key file on muse-vm. While TS_AUTHKEY is unset, the join falls back to this key (migration fallback; the source is reported as authKeySource)
+#   WORKER_API_KEY - Bearer key callers must present to /api/*; also signs the login cookie
+#   MONITOR_HMAC_SECRET - shared secret for the main Worker's HMAC-signed calls to /api/hmac/* (set the same value there)
+# Full ledger: docs/KEY_LEDGER.md

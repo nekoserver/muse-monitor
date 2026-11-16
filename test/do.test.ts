@@ -81,12 +81,12 @@ function makeCtx(initial: Record<string, unknown> = {}) {
   };
   return { ctx: ctx as unknown as DurableObjectState, stored, waits };
 }
-const ENV = { TS_API_KEY: "tskey-auth-secret" };
+const ENV = { TS_AUTHKEY: "tskey-auth-secret", TS_API_KEY: "receiver-key-secret" };
 const gateway = (env: Record<string, string> = ENV, ctx = makeCtx().ctx) => new MonitorGateway(ctx, env as never);
 const get = (gw: MonitorGateway, path: string) => gw.fetch(new Request(`http://do${path}`));
 
 describe("GET /monitor/<section>", () => {
-  it("joins with TS_API_KEY, finds muse-vm, and sends the same TS_API_KEY to the receiver", async () => {
+  it("joins with TS_AUTHKEY, finds muse-vm, and sends TS_API_KEY to the receiver (roles separated)", async () => {
     const gw = gateway();
     const res = await get(gw, "/monitor/jobs");
     expect(res.status).toBe(200);
@@ -96,7 +96,7 @@ describe("GET /monitor/<section>", () => {
     expect(node.config).toMatchObject({ authKey: "tskey-auth-secret", hostname: "muse-monitor", ephemeral: false });
     expect(node.login).toHaveBeenCalledWith("tskey-auth-secret");
     expect(node.requests.map((r) => r.url)).toEqual(["http://100.86.29.77:8090/health", "http://100.86.29.77:8090/monitor/jobs"]);
-    expect(node.requests[1]).toMatchObject({ method: "GET", headers: [["Authorization", "Bearer tskey-auth-secret"]] });
+    expect(node.requests[1]).toMatchObject({ method: "GET", headers: [["Authorization", "Bearer receiver-key-secret"]] });
   });
 
   it("passes the receiver's other statuses and bodies through unchanged", async () => {
@@ -120,6 +120,7 @@ describe("GET /monitor/<section>", () => {
     expect(body).toMatchObject({ error: "receiver_unauthorized", keySource: "TS_API_KEY", receiver: { error: "unauthorized" } });
     expect(body.message).toContain("TS_API_KEY");
     expect(JSON.stringify(body)).not.toContain("tskey-auth-secret");
+    expect(JSON.stringify(body)).not.toContain("receiver-key-secret");
   });
 
   it("explains a 503 from the receiver as a missing key on the receiver side", async () => {
@@ -132,11 +133,22 @@ describe("GET /monitor/<section>", () => {
     expect(await res.json()).toMatchObject({ error: "receiver_key_not_configured", receiver: "no key" });
   });
 
-  it("reads only TS_API_KEY: a leftover TS_AUTHKEY is neither used to join nor sent", async () => {
+  it("TS_AUTHKEY alone does not open the receiver: without TS_API_KEY the answer is receiver_key_missing and the node is not started", async () => {
     const res = await get(gateway({ TS_AUTHKEY: "tskey-other" }), "/monitor/jobs");
     expect(res.status).toBe(500);
     expect(await res.json()).toMatchObject({ error: "receiver_key_missing" });
     expect(nodes).toHaveLength(0);
+  });
+
+  it("while TS_AUTHKEY is unset, joins with TS_API_KEY (migration fallback) and reports the source", async () => {
+    const gw = gateway({ TS_API_KEY: "tskey-auth-secret" });
+    const res = await get(gw, "/monitor/jobs");
+    expect(res.status).toBe(200);
+    expect(nodes[0].config).toMatchObject({ authKey: "tskey-auth-secret" });
+    expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-secret");
+    expect(nodes[0].requests[1].headers).toEqual([["Authorization", "Bearer tskey-auth-secret"]]);
+    expect(await (await get(gw, "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_API_KEY" });
+    expect(await (await get(gw, "/public-status")).json()).toMatchObject({ authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY" });
   });
 
   it("does not send a request with an empty or undefined Bearer when neither key is set", async () => {
@@ -297,35 +309,37 @@ describe("node start failures", () => {
       node.callbacks!.notifyState("NeedsLogin");
       node.callbacks!.notifyBrowseToURL("https://login.tailscale.com/a/abc123");
     });
-    const gw = gateway({ TS_API_KEY: "expired-key" });
+    const gw = gateway({ TS_AUTHKEY: "expired-key", TS_API_KEY: "receiver-key-secret" });
     const pending = get(gw, "/monitor/jobs");
     await vi.advanceTimersByTimeAsync(60_000);
     const res = await pending;
     expect(res.status).toBe(502);
     const body = await res.json();
     expect(body).toMatchObject({ error: "tailnet_unavailable" });
-    expect(body.message).toContain("the auth key from TS_API_KEY was not accepted");
+    expect(body.message).toContain("the auth key from TS_AUTHKEY was not accepted");
     expect(body.message).toContain("https://login.tailscale.com/a/abc123");
     expect(body.message).not.toContain("expired-key");
     expect(nodes[0].login).toHaveBeenCalledWith("expired-key");
     const status = await (await get(gw, "/status")).json();
-    expect(status).toMatchObject({ loginUrl: "https://login.tailscale.com/a/abc123", authKeyConfigured: true, authKeySource: "TS_API_KEY" });
+    expect(status).toMatchObject({ loginUrl: "https://login.tailscale.com/a/abc123", authKeyConfigured: true, authKeySource: "TS_AUTHKEY" });
   });
 
-  it("uses TS_API_KEY as the auth key instead of asking for interactive login", async () => {
-    const gw = gateway({ TS_API_KEY: "tskey-auth-shared" });
+  it("uses TS_AUTHKEY as the auth key instead of asking for interactive login", async () => {
+    const gw = gateway({ TS_AUTHKEY: "tskey-auth-shared", TS_API_KEY: "receiver-key" });
     const res = await get(gw, "/monitor/jobs");
     expect(res.status).toBe(200);
     expect(nodes[0].config).toMatchObject({ authKey: "tskey-auth-shared" });
     expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-shared");
-    expect(nodes[0].requests[1].headers).toEqual([["Authorization", "Bearer tskey-auth-shared"]]);
-    expect(await (await get(gw, "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_API_KEY", loginUrl: null });
+    expect(nodes[0].requests[1].headers).toEqual([["Authorization", "Bearer receiver-key"]]);
+    expect(await (await get(gw, "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_AUTHKEY", loginUrl: null });
   });
 
-  it("reports authKeyConfigured from TS_API_KEY before the node starts", async () => {
+  it("reports authKeyConfigured from TS_AUTHKEY before the node starts, with the TS_API_KEY fallback", async () => {
+    expect(await (await get(gateway({ TS_AUTHKEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_AUTHKEY" });
     expect(await (await get(gateway({ TS_API_KEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_API_KEY" });
-    expect(await (await get(gateway({ TS_AUTHKEY: "k" }), "/status")).json()).toMatchObject({ authKeyConfigured: false, authKeySource: null });
+    expect(await (await get(gateway({ TS_AUTHKEY: "k", TS_API_KEY: "r" }), "/status")).json()).toMatchObject({ authKeyConfigured: true, authKeySource: "TS_AUTHKEY" });
     expect(await (await get(gateway({ TS_API_KEY: "" }), "/status")).json()).toMatchObject({ authKeyConfigured: false, authKeySource: null });
+    expect(await (await get(gateway({}), "/status")).json()).toMatchObject({ authKeyConfigured: false, authKeySource: null });
   });
 
   it("keeps answering tailnet_unavailable while the node is not Running, and works once it is", async () => {
@@ -334,7 +348,7 @@ describe("node start failures", () => {
     const gw = gateway();
     const first = get(gw, "/monitor/jobs");
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(await (await first).json()).toMatchObject({ error: "tailnet_unavailable", message: expect.stringContaining("auth key from: TS_API_KEY") });
+    expect(await (await first).json()).toMatchObject({ error: "tailnet_unavailable", message: expect.stringContaining("auth key from: TS_AUTHKEY") });
 
     // Second request: the node exists but is still not Running. It must not be used as if it were up.
     const second = get(gw, "/monitor/jobs");
@@ -389,10 +403,10 @@ describe("GET /public-status (for /health, no secrets)", () => {
     await get(gw, "/monitor/jobs");
     const text = await (await get(gw, "/public-status")).text();
     expect(JSON.parse(text)).toEqual({
-      node: "Running", authKeySource: "TS_API_KEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
+      node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
       receiverPort: 8090, receiverProbes: [{ name: "muse-vm", result: "ok" }],
     });
-    for (const secret of ["100.86.29.77", "tskey-auth-secret", "ts-api-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
+    for (const secret of ["100.86.29.77", "tskey-auth-secret", "receiver-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
   });
 
   it("when Running but the receiver is not resolved yet, probes it in the background and shows why it failed", async () => {
@@ -424,7 +438,7 @@ describe("GET /status", () => {
   it("before any request: not-started, without starting the node", async () => {
     const gw = gateway();
     expect(await (await get(gw, "/status")).json()).toEqual({
-      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_API_KEY",
+      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_AUTHKEY",
     });
     expect(nodes).toHaveLength(0);
   });
@@ -439,7 +453,7 @@ describe("GET /status", () => {
       receiver: { baseName: "muse-vm", resolvedIp: "100.86.29.77", candidates: [{ name: "muse-vm", ip: "100.86.29.77" }] },
       tailscale: { backendState: "Running" },
     });
-    expect(text).not.toContain("ts-api-key-secret");
+    expect(text).not.toContain("receiver-key-secret");
     expect(text).not.toContain("tskey-auth-secret");
   });
 
@@ -474,5 +488,43 @@ describe("node state persistence", () => {
     nodes[0].config.stateStorage.setState("k", "v");
     await Promise.all(store.waits);
     expect((await (await get(gw, "/status")).json()).lastError).toContain("storage full");
+  });
+});
+
+describe("POST /hmac-claim (HMAC replay prevention, SPEC REQ-SEC-011/012)", () => {
+  const claim = (gw: MonitorGateway, sig: string, ts: number) =>
+    gw.fetch(new Request("http://do/hmac-claim", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sig, ts }) }));
+  const SIG_A = "a".repeat(64);
+  const SIG_B = "b".repeat(64);
+
+  it("accepts a signature once and refuses the same signature again", async () => {
+    const gw = gateway();
+    expect(await (await claim(gw, SIG_A, 1_000)).json()).toEqual({ ok: true });
+    expect(await (await claim(gw, SIG_A, 1_000)).json()).toEqual({ ok: false });
+    expect(await (await claim(gw, SIG_B, 1_000)).json()).toEqual({ ok: true });
+  });
+
+  it("keeps the claims across instances through DO storage", async () => {
+    const store = makeCtx();
+    expect(await (await claim(gateway(ENV, store.ctx), SIG_A, 1_000)).json()).toEqual({ ok: true });
+    await Promise.all(store.waits);
+    expect(await (await claim(gateway(ENV, store.ctx), SIG_A, 1_001)).json()).toEqual({ ok: false });
+  });
+
+  it("prunes claims older than twice the HMAC window (600 s), so an old signature can be claimed again", async () => {
+    const gw = gateway();
+    expect(await (await claim(gw, SIG_A, 1_000)).json()).toEqual({ ok: true });
+    // A claim at ts=1601 prunes entries older than 1001; SIG_A (ts 1000) is gone afterwards.
+    expect(await (await claim(gw, SIG_B, 1_601)).json()).toEqual({ ok: true });
+    expect(await (await claim(gw, SIG_A, 1_601)).json()).toEqual({ ok: true });
+  });
+
+  it("rejects malformed claims with 400", async () => {
+    const gw = gateway();
+    for (const body of [{ sig: "xyz", ts: 1_000 }, { sig: SIG_A, ts: "soon" }, { sig: SIG_A }, {}]) {
+      const res = await gw.fetch(new Request("http://do/hmac-claim", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+      expect(res.status).toBe(400);
+    }
+    expect((await gw.fetch(new Request("http://do/hmac-claim"))).status).toBe(404);
   });
 });

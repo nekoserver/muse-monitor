@@ -63,10 +63,10 @@ Durable Object (MonitorGateway)
 
 | 項目 | 内容 |
 |---|---|
-| `revision` | コードの版の目印。2以上なら netmap の読み違いの修正(#7)が入っている。3で `node` を追加 |
+| `revision` | コードの版の目印。2以上なら netmap の読み違いの修正(#7)が入っている。3で `node` を追加。9で鍵の役割分離・HMAC リプレイ防止・構造化監査ログ |
 | `version` | `[version_metadata]` の版のID・タグ・デプロイ時刻。無ければ `null` |
 | `node.node` | ノードの状態(`not-started`・`NeedsLogin`・`Running` など) |
-| `node.authKeySource` | ノードの参加に使う鍵のシークレット名(`TS_API_KEY` / `null`) |
+| `node.authKeySource` | ノードの参加に使った鍵のシークレット名(`TS_AUTHKEY` / `TS_API_KEY` / `null`)。`TS_API_KEY` なら移行フォールバック中 |
 | `node.receiverKeySource` | 受信側へ送る鍵のシークレット名 |
 | `node.loginPending` | 対話ログインの承認待ちか(URLは `/api/status` で鍵を付けて見る) |
 | `node.receiverCandidates` | netmap に見えている muse-vm(-N) の数。0 なら muse-vm がピアに見えていない |
@@ -76,6 +76,10 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 
 - ヘッダ `X-Muse-Timestamp`: unix 秒
 - ヘッダ `X-Muse-Signature`: `HMAC-SHA256(MONITOR_HMAC_SECRET, "<timestamp>.<section>")` の hex
+- 署名は1回だけ受理される。同じ署名の再送は 401 `{"error":"replay"}`。
+  受理記録を確認できない場合は 503 `{"error":"replay_check_unavailable"}`（fail-closed）
+- `/api/*` と `/api/hmac/*` の認証判定は、1件ごとに構造化監査ログ（JSON 1行）を出す。
+  鍵の値・Cookie の値・署名そのものは記録しない
 
 ダッシュボード画面では API キーを入力して取得します
 （キーはブラウザの外に送信されません）。
@@ -87,7 +91,8 @@ HMAC の形式（本体 Worker からの呼び出し用）:
 
 | 名前              | 用途                                   |
 |-------------------|----------------------------------------|
-| `TS_API_KEY`      | 鍵はこれ1つ。WASM ノードの Tailscale 参加と、受信 API への Bearer の両方に同じ値を使う。未設定なら対話ログイン（`/api/status` の `loginUrl` を開いて承認）になり、受信 API は呼ばない |
+| `TS_AUTHKEY`      | Tailscale が発行する認証キー。WASM ノードの tailnet 参加専用で、受信 API へは送らない。未設定の間は参加が `TS_API_KEY` へフォールバックし、その旨が `authKeySource` に出る |
+| `TS_API_KEY`      | 運用者が決める任意文字列。受信 API への Bearer 専用。受信側の鍵ファイル（muse-vm の `~/.config/muse-receiver.env`）と同じ値を置く。未設定なら受信 API は呼ばない |
 | `WORKER_API_KEY`  | `/api/*` への Bearer 認証。ログイン Cookie(`mm_auth`、7日、HttpOnly・Secure・SameSite=Strict)の署名にも使う。Cookie にキーは入らない。キーを変えると全 Cookie が無効になる |
 | `MONITOR_HMAC_SECRET` | 本体 Worker と共有する HMAC 鍵（両方に同じ値を設定） |
 
@@ -101,18 +106,21 @@ IP はノードの再登録で変わり、名前には数字の接尾辞が付�
 
 | 名前 | 置き場所 | 何の鍵か | 値 |
 |------|----------|----------|----|
-| `TS_API_KEY` | muse-monitor のシークレットと、受信側（muse-vm の `receiver.py`）の起動時の環境変数 | tailnet への参加と、受信側への Bearer | Tailscale 管理画面で発行した認証キー。両方に同じ値 |
+| `TS_AUTHKEY` | muse-monitor のシークレット | tailnet への参加専用 | Tailscale 管理画面で発行した認証キー |
+| `TS_API_KEY` | muse-monitor のシークレットと、受信側の鍵ファイル（muse-vm の `~/.config/muse-receiver.env`） | 受信側への Bearer | 任意の文字列。両方に同じ値 |
 | `WORKER_API_KEY` | muse-monitor のシークレット | ダッシュボードの `/api/*` を呼ぶ際の Bearer | 任意の文字列 |
 | `MONITOR_HMAC_SECRET` | muse-monitor と本体 Worker の両方 | 本体 Worker からの HMAC 署名の共有鍵 | 両方に同じ任意の文字列 |
 
-現時点では受信側は未起動で、キーはどれも未決定です。この表は設定時の対応表です。
+鍵の正本は台帳（`docs/KEY_LEDGER.md`）で、名前・発行者・用途・ローテーション・状態をそちらに記録する。
+受信側は稼働中だが、Bearer の照合はまだ有効化していない（有効化の順序は SPEC.muse-monitor.security.hardening の移行手順）。
 
-どの鍵がノードに渡ったかは `/api/status` の `authKeySource`（`TS_API_KEY` / `null`）で確かめられます（値は出しません）。受信側が 401 を返したときは `receiver_unauthorized`、503 のときは `receiver_key_not_configured` として、どの鍵を送ったか（`keySource`）と合わせて返します。
+どの鍵がノードに渡ったかは `/api/status` の `authKeySource`（`TS_AUTHKEY` / `TS_API_KEY` / `null`）で確かめられます（値は出しません）。受信側が 401 を返したときは `receiver_unauthorized`、503 のときは `receiver_key_not_configured` として、どの鍵を送ったか（`keySource`）と合わせて返します。
 
 ## デプロイ
 
 ```sh
 npm install
+npx wrangler secret put TS_AUTHKEY
 npx wrangler secret put TS_API_KEY
 npx wrangler secret put WORKER_API_KEY
 npx wrangler secret put MONITOR_HMAC_SECRET
