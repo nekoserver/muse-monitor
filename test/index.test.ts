@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 18,
+      status: "ok", worker: "muse-monitor", revision: 19,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 18, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 19, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -192,7 +192,7 @@ describe("login cookie: keeps the authenticated state for 7 days, never the key"
   it("the dashboard sends no Authorization header when the key box is empty (the cookie is used), and has a logout button; the key is never stored in the browser", async () => {
     const { env } = makeEnv();
     const html = await (await worker.fetch(call("/"), env)).text();
-    expect(html).toContain('id="logout"');
+    expect(html).toContain('id="authbtn"');
     expect(html).toContain("/api/logout");
     expect(html).toMatch(/function headers\(\) \{[^}]*key\(\) \?/);
     expect(html).not.toMatch(/localStorage|sessionStorage|document\.cookie/);
@@ -411,5 +411,22 @@ describe("dashboard script", () => {
     // whether or not the viewer is logged in.
     expect(html).toContain("fetch('/health')");
     expect(html).toContain("loadLoginState()");
+  });
+
+  it("the key button reflects the actual login state (REQ-SEC-038): starts as キー登録， probes the cookie on load, and switches both ways", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    // The button's initial label is the register action, not logout.
+    expect(html).toMatch(/<button type="button" id="authbtn" onclick="authAction\(\)">キー登録<\/button>/);
+    // On load the page probes the login state with the cookie only (no key sent).
+    expect(html).toContain("probeLogin()");
+    expect(html).toMatch(/async function probeLogin\(\) \{\s*try \{\s*const r = await fetch\('\/api\/status'\);/);
+    // One state setter drives both labels.
+    expect(html).toContain("function setLoggedIn(");
+    expect(html).toContain("v ? 'ログアウト' : 'キー登録'");
+    // A 401 from a data fetch (expired cookie) flips the button back to キー登録.
+    expect(html).toMatch(/r\.status === 401\) setLoggedIn\(false\)/);
+    // Registering with a key goes through /api/status, whose 200 sets the cookie.
+    expect(html).toContain("async function authAction()");
   });
 });

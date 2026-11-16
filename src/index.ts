@@ -42,7 +42,7 @@ interface Env {
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 18;
+const MONITOR_REVISION = 19;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -160,7 +160,8 @@ const DASHBOARD = `<!DOCTYPE html>
 <p class="meta">実行系はここにはありません。依頼の受付はホスト側ダッシュボード、
 承認はホストのシェルでのみ行えます。</p>
 <p><label>API キー: <input type="password" id="key" size="32" autocomplete="off"></label>
-<button type="button" id="logout" onclick="logout()">ログアウト</button>
+<button type="button" id="authbtn" onclick="authAction()">キー登録</button>
+<span class="meta" id="authmsg"></span>
 <span class="meta">キーで認証が通ると、このブラウザで7日間ログインしたままになります(キーは保存しません)</span>
 <button type="button" onclick="loadAll()">全て取得</button>
 <span style="margin-left:1em">表示:
@@ -183,15 +184,46 @@ const DASHBOARD = `<!DOCTYPE html>
   let view = "tabs", activeTab = CATS[0][0], treeSel = "status";
   function key() { return document.getElementById('key').value.trim(); }
   function headers() { return key() ? { Authorization: 'Bearer ' + key() } : {}; }
-  async function logout() {
-    await fetch('/api/logout', { method: 'POST' });
-    document.getElementById('key').value = '';
-    document.getElementById('nodestat').textContent = 'ノード状態: （ログアウトしました）';
+  let loggedIn = false;
+  function setLoggedIn(v) {
+    loggedIn = v;
+    document.getElementById('authbtn').textContent = v ? 'ログアウト' : 'キー登録';
+  }
+  // Cookie だけで認証が通るかを見る(キーは送らない)。通ればログイン中である。
+  async function probeLogin() {
+    try {
+      const r = await fetch('/api/status');
+      setLoggedIn(r.status === 200);
+    } catch { setLoggedIn(false); }
+  }
+  async function authAction() {
+    const msg = document.getElementById('authmsg');
+    if (loggedIn) {
+      await fetch('/api/logout', { method: 'POST' });
+      document.getElementById('key').value = '';
+      setLoggedIn(false);
+      msg.textContent = '';
+      document.getElementById('nodestat').textContent = 'ノード状態: （ログアウトしました）';
+      return;
+    }
+    if (!key()) { msg.textContent = 'キーを入力してください'; return; }
+    try {
+      const r = await fetch('/api/status', { headers: headers() });
+      if (r.status === 200) {
+        setLoggedIn(true);
+        msg.textContent = '';
+        document.getElementById('key').value = '';
+        loadAll();
+      } else {
+        msg.textContent = 'キーが違います';
+      }
+    } catch (err) { msg.textContent = '登録失敗: ' + err; }
   }
   async function load(name) {
     data[name] = "取得中…"; render();
     try {
       const r = await fetch('/api/monitor/' + name, { headers: headers() });
+      if (r.status === 401) setLoggedIn(false);
       const j = await r.json();
       data[name] = j.output !== undefined ? j.output : JSON.stringify(j, null, 2);
     } catch (err) { data[name] = '取得失敗: ' + err; }
@@ -201,6 +233,8 @@ const DASHBOARD = `<!DOCTYPE html>
     const el = document.getElementById('nodestat');
     try {
       const r = await fetch('/api/status', { headers: headers() });
+      if (r.status === 401) setLoggedIn(false);
+      if (r.status === 200 && key()) { setLoggedIn(true); document.getElementById('key').value = ''; }
       const j = await r.json();
       const rcv = j.receiver || {};
       el.textContent = 'ノード状態: ' + (j.node ?? JSON.stringify(j)) +
@@ -267,6 +301,7 @@ const DASHBOARD = `<!DOCTYPE html>
   function setView(v) { view = v; render(); }
   render();
   loadLoginState();
+  probeLogin();
   loadStatus();  // 7日間の Cookie が残っていれば、キーを入れずに状態が出る
 </script>
 </body></html>`;
