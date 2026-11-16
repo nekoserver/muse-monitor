@@ -50,6 +50,7 @@ class FakeNode {
 let nodes: FakeNode[];
 let goRuns: number;
 let onLogin: (node: FakeNode) => void;
+let onStart: (node: FakeNode) => void;
 let newIpnResult: ((config: IPNConfig) => unknown) | null;
 
 beforeEach(() => {
@@ -57,12 +58,15 @@ beforeEach(() => {
   goRuns = 0;
   newIpnResult = null;
   onLogin = (node) => queueMicrotask(() => node.up());
+  onStart = () => {};
   (globalThis as Record<string, unknown>).Go = class { importObject = {}; run() { goRuns++; return new Promise(() => {}); } };
   vi.spyOn(WebAssembly, "instantiate").mockResolvedValue({} as WebAssembly.Instance);
   (globalThis as Record<string, unknown>).newIPN = (config: IPNConfig) => {
     if (newIpnResult) return newIpnResult(config);
     const node = new FakeNode(config);
     node.login.mockImplementation(() => onLogin(node));
+    const run = node.run.bind(node);
+    node.run = (callbacks) => { run(callbacks); onStart(node); };
     nodes.push(node);
     return node;
   };
@@ -475,9 +479,28 @@ describe("node state persistence", () => {
     expect(store.stored.get("ts-state")).toEqual({ "_current-profile": "profile-1" });
 
     const next = gateway(ENV, makeCtx({ "ts-state": store.stored.get("ts-state") }).ctx);
+    onStart = (node) => queueMicrotask(() => node.up());
     await get(next, "/monitor/jobs");
     expect(nodes[1].config.stateStorage.getState("_current-profile")).toBe("profile-1");
     expect(nodes[1].config.stateStorage.getState("missing")).toBe("");
+  });
+
+  it("with persisted state, resumes from the state: no auth key is passed and login is not called", async () => {
+    const gw = gateway(ENV, makeCtx({ "ts-state": { "_current-profile": "profile-1" } }).ctx);
+    onStart = (node) => queueMicrotask(() => node.up());
+    const res = await get(gw, "/monitor/jobs");
+    expect(res.status).toBe(200);
+    expect(nodes[0].config.authKey).toBeUndefined();
+    expect(nodes[0].login).not.toHaveBeenCalled();
+  });
+
+  it("with persisted state that asks for login (NeedsLogin), uses the key for exactly one deferred login", async () => {
+    const gw = gateway(ENV, makeCtx({ "ts-state": { "_current-profile": "profile-1" } }).ctx);
+    onStart = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
+    const res = await get(gw, "/monitor/jobs");
+    expect(res.status).toBe(200);
+    expect(nodes[0].login).toHaveBeenCalledTimes(1);
+    expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-secret");
   });
 
   it("records a failed flush in lastError", async () => {

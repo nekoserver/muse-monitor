@@ -195,11 +195,17 @@ export class MonitorGateway extends DurableObject<Env> {
 
   private async startNode(): Promise<IPN> {
     await this.loadState();
+    // The join happens once. With persisted state the node resumes from it:
+    // no auth key is passed and login is not called, so changing (or
+    // breaking) a key secret can never wedge a node that already joined.
+    // Only a node whose state asks for login (NeedsLogin: state missing
+    // pieces, node key expired) gets one deferred login with the key.
+    const hasState = this.state.size > 0;
 
     const go = new Go();
     const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
     void go.run(instance);
-    const auth = this.authKey();
+    const auth = hasState ? null : this.authKey();
     const created = newIPN({
       ...(auth ? { authKey: auth.value } : {}),
       hostname: NODE_HOSTNAME,
@@ -218,9 +224,14 @@ export class MonitorGateway extends DurableObject<Env> {
     }
     const ipn = created;
 
+    let deferredLoginDone = false;
     const callbacks: IPNCallbacks = {
       notifyState: (state: string) => {
         this.lastStatus = state;
+        if (state === "NeedsLogin" && hasState && !deferredLoginDone) {
+          deferredLoginDone = true;
+          ipn.login(this.authKey()?.value);
+        }
         if (state !== "Running") return;
         this.pendingPanic = null;
         for (const w of [...this.waiters]) w.resolve();
@@ -239,7 +250,7 @@ export class MonitorGateway extends DurableObject<Env> {
     };
     ipn.run(callbacks);
     this.ipn = ipn;
-    ipn.login(auth?.value);
+    if (!hasState) ipn.login(auth?.value);
     return ipn;
   }
 

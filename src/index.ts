@@ -39,9 +39,10 @@ interface Env {
  * コードの版の目印(/health で返す)。どの修正が本番に入っているかを、鍵なしで見分けるため。
  * 2: netmapの読み違いの修正・鍵のフォールバック(nekoserver/muse-monitor#7)。3: /health にノードの公開状態を出す。
  * 9: 鍵の役割分離(TS_AUTHKEY=参加専用、TS_API_KEY=receiver専用)、HMACリプレイ防止、構造化監査ログ(SPEC.muse-monitor.security.hardening)。
+ * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 9;
+const MONITOR_REVISION = 10;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
