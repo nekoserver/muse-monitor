@@ -452,6 +452,9 @@ describe("dashboard script", () => {
     expect(html.indexOf('id="nodestat"')).toBeGreaterThan(gatedAt);
     // The grey-out applies to the section as a whole, not per button.
     expect(html).toMatch(/#gated\.off\s*\{[^}]*opacity:\s*\.45[^}]*pointer-events:\s*none/);
+    // REQ-SEC-041: the grey-out also drops saturation, so text and button
+    // colours inside the section do not keep standing out.
+    expect(html).toMatch(/#gated\.off\s*\{[^}]*filter:\s*grayscale\(1\)/);
     expect(html).not.toContain("applyAuthToButtons");
     // One function toggles the section from the login state, driven by the setter.
     expect(html).toContain("function applyAuthGate()");

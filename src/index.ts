@@ -141,7 +141,7 @@ const DASHBOARD = `<!DOCTYPE html>
   .login-ok { color: #7ee787; font-weight: bold; }
   .login-ng { color: #ff7b72; font-weight: bold; }
   button { margin-left: .5em; cursor: pointer; }
-  #gated.off { opacity: .45; pointer-events: none; }
+  #gated.off { opacity: .45; pointer-events: none; filter: grayscale(1); }
   .viewbtn.active, .tab.active { background: #2a4d2a; color: #fff; }
   .tabs { margin: 1em 0 0; border-bottom: 1px solid #2a4d2a; padding-bottom: .4em; }
   .layout { display: flex; gap: 1em; align-items: flex-start; }
