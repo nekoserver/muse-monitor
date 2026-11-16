@@ -40,9 +40,10 @@ interface Env {
  * 2: netmapの読み違いの修正・鍵のフォールバック(nekoserver/muse-monitor#7)。3: /health にノードの公開状態を出す。
  * 9: 鍵の役割分離(TS_AUTHKEY=参加専用、TS_API_KEY=receiver専用)、HMACリプレイ防止、構造化監査ログ(SPEC.muse-monitor.security.hardening)。
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
+ * 23: 未認証時のグレーアウトに彩度落としを追加(REQ-SEC-041)。ログイン待ちの間、認証済み表示に Tailscale ログインへのリンクを出す(REQ-SEC-042)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 22;
+const MONITOR_REVISION = 23;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -158,6 +159,7 @@ const DASHBOARD = `<!DOCTYPE html>
 </style></head><body>
 <h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
 <p id="loginstat" class="login-ng">ノードのログイン状態: 未ログイン（未取得）</p>
+<p><a id="loginlink" href="#" target="_blank" rel="noopener" style="display:none">Tailscale ログインを承認する</a></p>
 <p id="authstat" class="login-ng">このブラウザのキー認証: 未認証</p>
 <p class="meta">実行系はここにはありません。依頼の受付はホスト側ダッシュボード、
 承認はホストのシェルでのみ行えます。</p>
@@ -250,6 +252,10 @@ const DASHBOARD = `<!DOCTYPE html>
       if (r.status === 401) setLoggedIn(false);
       if (r.status === 200 && key()) { setLoggedIn(true); document.getElementById('key').value = ''; }
       const j = await r.json();
+      // ノードが対話ログイン待ちなら、認証済み表示でのみログイン URL へのリンクを出す(REQ-SEC-042)。
+      const ll = document.getElementById('loginlink');
+      if (j.loginUrl) { ll.href = j.loginUrl; ll.style.display = ''; }
+      else { ll.style.display = 'none'; ll.removeAttribute('href'); }
       const rcv = j.receiver || {};
       el.textContent = 'ノード状態: ' + (j.node ?? JSON.stringify(j)) +
         ' / 受信側: ' + (rcv.baseName ?? '-') + ' -> ' + (rcv.resolvedIp ?? '未解決') +

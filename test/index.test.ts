@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 22,
+      status: "ok", worker: "muse-monitor", revision: 23,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 22, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 23, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -461,5 +461,20 @@ describe("dashboard script", () => {
     expect(html).toMatch(/classList\.toggle\('off', !loggedIn\)/);
     expect(html).toMatch(/\.inert = !loggedIn/);
     expect(html).toMatch(/function setLoggedIn\(v\) \{[\s\S]*?applyAuthGate\(\)/);
+  });
+
+  it("offers the Tailscale login link from the authenticated status while the node waits for login (REQ-SEC-042)", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    // A dedicated link element sits next to the node login-state line, hidden at first paint.
+    expect(html).toContain('<a id="loginlink"');
+    expect(html).toMatch(/<a id="loginlink"[^>]*style="display:none"/);
+    expect(html.indexOf('id="loginlink"')).toBeGreaterThan(html.indexOf('id="loginstat"'));
+    // The authenticated status fetch drives it: a loginUrl in /api/status shows
+    // the link, anything else (Running, no URL, 401) hides it.
+    expect(html).toMatch(/function loadStatus\(\) \{[\s\S]*?j\.loginUrl/);
+    expect(html).toMatch(/getElementById\('loginlink'\)/);
+    // The keyless /health read must not be the source of the URL.
+    expect(html).not.toMatch(/function loadLoginState\(\) \{[\s\S]*?loginUrl/);
   });
 });
