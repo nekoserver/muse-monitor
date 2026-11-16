@@ -409,7 +409,7 @@ describe("GET /public-status (for /health, no secrets)", () => {
     const text = await (await get(gw, "/public-status")).text();
     expect(JSON.parse(text)).toEqual({
       node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
-      receiverPort: 8090, receiverProbes: [{ name: "muse-vm", result: "ok" }],
+      receiverPort: 8090, receiverProbes: [{ name: "muse-vm", result: "ok" }], lastError: null,
     });
     for (const secret of ["100.86.29.77", "tskey-auth-secret", "receiver-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
   });
@@ -436,6 +436,23 @@ describe("GET /public-status (for /health, no secrets)", () => {
     const text = await (await get(gw, "/public-status")).text();
     expect(JSON.parse(text)).toMatchObject({ node: "NeedsLogin", loginPending: true, receiverCandidates: 0 });
     expect(text).not.toContain("login.tailscale.com");
+  });
+
+  it("shows the failure reason as a sanitized summary: no URLs, IPs or key values (REQ-SEC-031)", async () => {
+    onLogin = (node) => queueMicrotask(() => node.callbacks!.notifyPanicRecover("Tailscale could not start: Get https://login.tailscale.com/a/xyz via 100.86.29.77 with tskey-auth-secret / receiver-key-secret"));
+    const gw = gateway();
+    await get(gw, "/monitor/jobs");
+    const body = await (await get(gw, "/public-status")).json();
+    expect(body.lastError).toContain("Tailscale could not start");
+    for (const secret of ["login.tailscale.com", "100.86.29.77", "tskey-auth-secret", "receiver-key-secret"]) expect(body.lastError).not.toContain(secret);
+  });
+
+  it("caps the public failure summary at 120 characters (REQ-SEC-031)", async () => {
+    onLogin = (node) => queueMicrotask(() => node.callbacks!.notifyPanicRecover("x".repeat(300)));
+    const gw = gateway();
+    await get(gw, "/monitor/jobs");
+    const body = await (await get(gw, "/public-status")).json();
+    expect(body.lastError.length).toBeLessThanOrEqual(121);
   });
 });
 

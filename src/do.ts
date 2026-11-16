@@ -539,7 +539,24 @@ export class MonitorGateway extends DurableObject<Env> {
       receiverResolved: Boolean(this.resolver.cachedIp),
       receiverPort: this.resolver.probePort,
       receiverProbes: this.resolver.lastProbes,
+      lastError: this.publicErrorSummary(),
     });
+  }
+
+  /**
+   * The failure reason in public form (REQ-SEC-031): /health must show WHY
+   * the node is down without needing a key, so the summary strips URLs, IP
+   * addresses and any occurrence of the configured key values, and is
+   * length-capped.
+   */
+  private publicErrorSummary(): string | null {
+    if (!this.lastError) return null;
+    let s = this.lastError;
+    for (const secret of [this.authKey()?.value, this.receiverKey()?.value]) {
+      if (secret) s = s.split(secret).join("[redacted]");
+    }
+    s = s.replace(/https?:\/\/\S+/g, "[url]").replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "[ip]").replace(/\s+/g, " ").trim();
+    return s.length > 120 ? `${s.slice(0, 120)}…` : s;
   }
 
   async status(): Promise<Response> {
