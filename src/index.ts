@@ -42,7 +42,7 @@ interface Env {
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 19;
+const MONITOR_REVISION = 20;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -137,7 +137,7 @@ const DASHBOARD = `<!DOCTYPE html>
   pre { background: #1b1b1b; border: 1px solid #333; border-radius: 6px;
         padding: .6em 1em; overflow-x: auto; white-space: pre-wrap; }
   .meta { color: #999; font-size: .85em; }
-  #loginstat { font-size: 1.05em; }
+  #loginstat, #authstat { font-size: 1.05em; }
   .login-ok { color: #7ee787; font-weight: bold; }
   .login-ng { color: #ff7b72; font-weight: bold; }
   button { margin-left: .5em; cursor: pointer; }
@@ -157,6 +157,7 @@ const DASHBOARD = `<!DOCTYPE html>
 </style></head><body>
 <h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
 <p id="loginstat" class="login-ng">ノードのログイン状態: 未ログイン（未取得）</p>
+<p id="authstat" class="login-ng">このブラウザのキー認証: 未認証</p>
 <p class="meta">実行系はここにはありません。依頼の受付はホスト側ダッシュボード、
 承認はホストのシェルでのみ行えます。</p>
 <p><label>API キー: <input type="password" id="key" size="32" autocomplete="off"></label>
@@ -188,6 +189,9 @@ const DASHBOARD = `<!DOCTYPE html>
   function setLoggedIn(v) {
     loggedIn = v;
     document.getElementById('authbtn').textContent = v ? 'ログアウト' : 'キー登録';
+    const a = document.getElementById('authstat');
+    a.className = v ? 'login-ok' : 'login-ng';
+    a.textContent = 'このブラウザのキー認証: ' + (v ? '認証済み' : '未認証');
   }
   // Cookie だけで認証が通るかを見る(キーは送らない)。通ればログイン中である。
   async function probeLogin() {

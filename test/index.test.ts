@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 19,
+      status: "ok", worker: "muse-monitor", revision: 20,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 19, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 20, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -428,5 +428,15 @@ describe("dashboard script", () => {
     expect(html).toMatch(/r\.status === 401\) setLoggedIn\(false\)/);
     // Registering with a key goes through /api/status, whose 200 sets the cookie.
     expect(html).toContain("async function authAction()");
+  });
+
+  it("shows the two stages separately (REQ-SEC-039): the browser's own key-auth state has its own line, updated by the same setter", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    expect(html).toContain('id="authstat"');
+    expect(html).toContain("このブラウザのキー認証:");
+    expect(html).toContain("認証済み");
+    expect(html).toContain("未認証");
+    expect(html).toMatch(/getElementById\('authstat'\)/);
   });
 });
