@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 20,
+      status: "ok", worker: "muse-monitor", revision: 21,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 20, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 21, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -438,5 +438,20 @@ describe("dashboard script", () => {
     expect(html).toContain("認証済み");
     expect(html).toContain("未認証");
     expect(html).toMatch(/getElementById\('authstat'\)/);
+  });
+
+  it("disables every button below the key box while logged out (REQ-SEC-040)", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    // Disabled buttons are visibly greyed out.
+    expect(html).toMatch(/button:disabled\s*\{[^}]*opacity/);
+    // The static fetch-all button starts disabled (before any probe completes).
+    expect(html).toContain('<button type="button" disabled onclick="loadAll()">全て取得</button>');
+    // One function drives all buttons except the auth button itself, from the login state.
+    expect(html).toContain("function applyAuthToButtons()");
+    expect(html).toMatch(/b\.id === 'authbtn'\) continue/);
+    expect(html).toMatch(/b\.disabled = !loggedIn/);
+    // The login-state setter applies it, so logout disables everything immediately.
+    expect(html).toMatch(/function setLoggedIn\(v\) \{[\s\S]*?applyAuthToButtons\(\)/);
   });
 });
