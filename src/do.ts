@@ -171,6 +171,11 @@ export class MonitorGateway extends DurableObject<Env> {
    * persisted state and never gets anywhere — the start failed, or it sits
    * in NoState with no login on offer — the state is assumed broken: it is
    * discarded once and the node rejoins from scratch with the auth key.
+   * REQ-SEC-036 adds the case where the resumed node falls back to
+   * interactive login although an auth key is configured: the registration
+   * the state points at no longer exists, so the same discard-and-rejoin
+   * applies. Without an auth key the state is kept, because the
+   * interactive login is then the operator's only way back in.
    */
   private async ensureNode(): Promise<IPN> {
     const ipn = await this.startOnce();
@@ -198,7 +203,16 @@ export class MonitorGateway extends DurableObject<Env> {
   }
 
   private recoveryEligible(err: unknown): boolean {
-    if (this.recoveryDone || !this.startedWithState || this.browseUrl) return false;
+    if (this.recoveryDone || !this.startedWithState) return false;
+    if (this.browseUrl) {
+      // REQ-SEC-036: a resumed node that falls back to interactive login
+      // although an auth key is configured points at a registration that
+      // no longer exists on the control plane — the saved state is dead
+      // weight, so discard it once and rejoin with the key. Without a
+      // key, the interactive login is the operator's only path and the
+      // state must be kept.
+      return this.lastStatus === "NeedsLogin" && this.authKey() !== null;
+    }
     return this.lastStatus === "NoState" || String(err).includes("could not start");
   }
 
