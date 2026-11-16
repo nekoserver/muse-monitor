@@ -42,7 +42,7 @@ interface Env {
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 14;
+const MONITOR_REVISION = 15;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -137,6 +137,9 @@ const DASHBOARD = `<!DOCTYPE html>
   pre { background: #1b1b1b; border: 1px solid #333; border-radius: 6px;
         padding: .6em 1em; overflow-x: auto; white-space: pre-wrap; }
   .meta { color: #999; font-size: .85em; }
+  #loginstat { font-size: 1.05em; }
+  .login-ok { color: #7ee787; font-weight: bold; }
+  .login-ng { color: #ff7b72; font-weight: bold; }
   button { margin-left: .5em; cursor: pointer; }
   .viewbtn.active, .tab.active { background: #2a4d2a; color: #fff; }
   .tabs { margin: 1em 0 0; border-bottom: 1px solid #2a4d2a; padding-bottom: .4em; }
@@ -153,6 +156,7 @@ const DASHBOARD = `<!DOCTYPE html>
   .main { flex: 1; min-width: 0; }
 </style></head><body>
 <h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
+<p id="loginstat" class="login-ng">ノードのログイン状態: 未ログイン（未取得）</p>
 <p class="meta">実行系はここにはありません。依頼の受付はホスト側ダッシュボード、
 承認はホストのシェルでのみ行えます。</p>
 <p><label>API キー: <input type="password" id="key" size="32" autocomplete="off"></label>
@@ -204,7 +208,27 @@ const DASHBOARD = `<!DOCTYPE html>
         ' / 候補: ' + ((rcv.candidates || []).map(c => c.name + '(' + c.ip + ')').join(', ') || 'なし');
     } catch (err) { el.textContent = 'ノード状態: 取得失敗 ' + err; }
   }
-  function loadAll() { loadStatus(); for (const [name] of SECTIONS) load(name); }
+  async function loadLoginState() {
+    // ノードのログイン状態は鍵なしの /health から取る(REQ-SEC-034)。
+    // 見る側がログインしていなくても、ノードがログイン中かどうかが色と文字で分かる。
+    const el = document.getElementById('loginstat');
+    try {
+      const r = await fetch('/health');
+      const j = await r.json();
+      const state = j.node && j.node.node;
+      if (state === 'Running') {
+        el.className = 'login-ok';
+        el.textContent = 'ノードのログイン状態: ログイン中';
+      } else {
+        el.className = 'login-ng';
+        el.textContent = 'ノードのログイン状態: 未ログイン（状態: ' + (state ?? '不明') + '）';
+      }
+    } catch (err) {
+      el.className = 'login-ng';
+      el.textContent = 'ノードのログイン状態: 未ログイン（取得失敗）';
+    }
+  }
+  function loadAll() { loadLoginState(); loadStatus(); for (const [name] of SECTIONS) load(name); }
   function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
   function card(name) {
     return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
@@ -242,6 +266,7 @@ const DASHBOARD = `<!DOCTYPE html>
   }
   function setView(v) { view = v; render(); }
   render();
+  loadLoginState();
   loadStatus();  // 7日間の Cookie が残っていれば、キーを入れずに状態が出る
 </script>
 </body></html>`;

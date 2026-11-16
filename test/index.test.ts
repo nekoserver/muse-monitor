@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 14,
+      status: "ok", worker: "muse-monitor", revision: 15,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 14, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 15, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -371,5 +371,21 @@ describe("dashboard script", () => {
     const catsSource = /const CATS = (\[[\s\S]*?\]);\n/.exec(html)![1];
     const tabbed = (JSON.parse(catsSource.replace(/,\s*\]$/, "]")) as [string, string[]][]).flatMap(([, n]) => n).sort();
     expect(tabbed).toEqual(sections);
+  });
+
+  it("shows the node's login state in colored text (REQ-SEC-034): a dedicated element, both labels, and a keyless /health read", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    expect(html).toContain('id="loginstat"');
+    expect(html).toContain("ログイン中");
+    expect(html).toContain("未ログイン");
+    // The two states are told apart by color as well as by the words.
+    expect(html).toMatch(/\.login-ok\s*\{[^}]*color:\s*#[0-9a-fA-F]+/);
+    expect(html).toMatch(/\.login-ng\s*\{[^}]*color:\s*#[0-9a-fA-F]+/);
+    expect(html).not.toMatch(/\.login-ok\s*\{[^}]*color:\s*(#[0-9a-fA-F]+)[^}]*\}[\s\S]*?\.login-ng\s*\{[^}]*color:\s*\1/);
+    // The state comes from /health, which needs no key: the label is visible
+    // whether or not the viewer is logged in.
+    expect(html).toContain("fetch('/health')");
+    expect(html).toContain("loadLoginState()");
   });
 });
