@@ -82,6 +82,11 @@ export class MonitorGateway extends DurableObject<Env> {
   private pendingPanic: string | null = null;
   private state = new Map<string, string>();
   private stateLoaded = false;
+  /** Whether the current node was started from persisted state, and whether the one state-discarding recovery has been used. */
+  private startedWithState = false;
+  private recoveryDone = false;
+  /** Bumped whenever a node is created or discarded, so a stale node's callbacks cannot touch the current node's tracking. */
+  private nodeGeneration = 0;
   /** Accepted HMAC signatures (sig -> unix ts), for replay prevention. */
   private claims: Map<string, number> | null = null;
   private flushPending: Promise<void> | null = null;
@@ -144,17 +149,53 @@ export class MonitorGateway extends DurableObject<Env> {
    * Running on its own, up to 60 s, so a node that is still waiting for
    * login approval, or that reported a panic, is never used as if it were
    * up, and a later approval makes the same node usable again.
+   *
+   * Recovery (SPEC REQ-SEC-026/027/028): if the node was started from
+   * persisted state and never gets anywhere — the start failed, or it sits
+   * in NoState with no login on offer — the state is assumed broken: it is
+   * discarded once and the node rejoins from scratch with the auth key.
    */
   private async ensureNode(): Promise<IPN> {
+    const ipn = await this.startOnce();
+    if (this.lastStatus === "Running") return ipn;
+    try {
+      await this.waitForRunning();
+      return ipn;
+    } catch (err) {
+      if (!this.recoveryEligible(err)) throw err;
+      await this.discardStateForRecovery(err);
+      const fresh = await this.startOnce();
+      if (this.lastStatus !== "Running") await this.waitForRunning();
+      return fresh;
+    }
+  }
+
+  private async startOnce(): Promise<IPN> {
     if (!this.ipn) {
       this.starting ??= this.startNode().finally(() => {
         this.starting = null;
       });
       await this.starting;
     }
-    const ipn = this.ipn!;
-    if (this.lastStatus !== "Running") await this.waitForRunning();
-    return ipn;
+    return this.ipn!;
+  }
+
+  private recoveryEligible(err: unknown): boolean {
+    if (this.recoveryDone || !this.startedWithState || this.browseUrl) return false;
+    return this.lastStatus === "NoState" || String(err).includes("could not start");
+  }
+
+  private async discardStateForRecovery(err: unknown): Promise<void> {
+    this.recoveryDone = true;
+    this.nodeGeneration++; // the wedged node's callbacks must not touch the fresh node's tracking
+    this.lastError = `discarded the persisted node state and rejoined with the auth key (recovery; cause: ${String(err).slice(0, 160)})`;
+    this.ipn = null;
+    this.peers = [];
+    this.browseUrl = null;
+    this.pendingPanic = null;
+    this.lastStatus = "not-started";
+    this.state.clear();
+    await this.ctx.storage.delete(STATE_KEY);
   }
 
   private waitForRunning(): Promise<void> {
@@ -201,6 +242,8 @@ export class MonitorGateway extends DurableObject<Env> {
     // Only a node whose state asks for login (NeedsLogin: state missing
     // pieces, node key expired) gets one deferred login with the key.
     const hasState = this.state.size > 0;
+    this.startedWithState = hasState;
+    const gen = ++this.nodeGeneration;
 
     const go = new Go();
     const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
@@ -227,6 +270,7 @@ export class MonitorGateway extends DurableObject<Env> {
     let deferredLoginDone = false;
     const callbacks: IPNCallbacks = {
       notifyState: (state: string) => {
+        if (gen !== this.nodeGeneration) return;
         this.lastStatus = state;
         if (state === "NeedsLogin" && hasState && !deferredLoginDone) {
           deferredLoginDone = true;
@@ -237,12 +281,15 @@ export class MonitorGateway extends DurableObject<Env> {
         for (const w of [...this.waiters]) w.resolve();
       },
       notifyNetMap: (netMap: string) => {
+        if (gen !== this.nodeGeneration) return;
         this.peers = parsePeers(netMap);
       },
       notifyBrowseToURL: (url: string) => {
+        if (gen !== this.nodeGeneration) return;
         this.browseUrl = url;
       },
       notifyPanicRecover: (error: string) => {
+        if (gen !== this.nodeGeneration) return;
         this.lastError = error;
         if (this.waiters.size === 0) this.pendingPanic = error;
         for (const w of [...this.waiters]) w.reject(new Error(error));

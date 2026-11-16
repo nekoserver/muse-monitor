@@ -80,6 +80,7 @@ function makeCtx(initial: Record<string, unknown> = {}) {
     storage: {
       get: async (k: string) => stored.get(k),
       put: async (k: string, v: unknown) => { stored.set(k, structuredClone(v)); },
+      delete: async (k: string) => { stored.delete(k); },
     },
     waitUntil: (p: Promise<unknown>) => { waits.push(p); },
   };
@@ -511,6 +512,61 @@ describe("node state persistence", () => {
     nodes[0].config.stateStorage.setState("k", "v");
     await Promise.all(store.waits);
     expect((await (await get(gw, "/status")).json()).lastError).toContain("storage full");
+  });
+});
+
+describe("DO recovery (SPEC REQ-SEC-026/027/028)", () => {
+  const SEEDED = { "ts-state": { "_current-profile": "profile-1", "_machinekey": "mk" } };
+
+  it("discards a persisted state whose node never leaves NoState, and rejoins with the auth key", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx(SEEDED);
+    const gw = gateway(ENV, store.ctx);
+    let starts = 0;
+    onStart = (node) => { starts++; if (starts === 1) queueMicrotask(() => node.callbacks!.notifyState("NoState")); };
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(60_000);
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(nodes).toHaveLength(2);
+    // The fresh node is a first join again: the key is passed and login is called with it.
+    expect(nodes[1].config.authKey).toBe("tskey-auth-secret");
+    expect(nodes[1].login).toHaveBeenCalledWith("tskey-auth-secret");
+    // The discard is recorded, without any secret value.
+    const status = await (await get(gw, "/status")).json();
+    expect(status.lastError).toContain("discarded the persisted node state");
+    expect(status.lastError).not.toContain("tskey-auth-secret");
+  });
+
+  it("recovers at most once: a fresh node that also wedges is an error, not another discard", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx(SEEDED);
+    const gw = gateway(ENV, store.ctx);
+    onStart = (node) => queueMicrotask(() => node.callbacks!.notifyState("NoState"));
+    onLogin = () => {};
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    const res = await pending;
+    expect(res.status).toBe(502);
+    expect(await res.json()).toMatchObject({ error: "tailnet_unavailable" });
+    expect(nodes).toHaveLength(2);
+  });
+
+  it("does not discard state when the node asks for login instead (browse URL present)", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx(SEEDED);
+    const gw = gateway(ENV, store.ctx);
+    onStart = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
+    onLogin = (node) => queueMicrotask(() => node.callbacks!.notifyBrowseToURL("https://login.tailscale.com/a/abc123"));
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(60_000);
+    const res = await pending;
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.message).toContain("the auth key from TS_AUTHKEY was not accepted");
+    expect(nodes).toHaveLength(1);
+    expect(store.stored.get("ts-state")).toEqual(SEEDED["ts-state"]);
   });
 });
 
