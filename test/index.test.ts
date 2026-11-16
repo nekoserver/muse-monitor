@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 15,
+      status: "ok", worker: "muse-monitor", revision: 18,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 15, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 18, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -281,6 +281,30 @@ describe("HMAC routes", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "replay_check_unavailable" });
     expect(calls).toEqual(["http://do/hmac-claim"]);
+  });
+});
+
+describe("GET /api/live (WebSocket, REQ-SEC-037)", () => {
+  it("rejects an unauthenticated upgrade with 401 and does not forward", async () => {
+    const { env, calls } = makeEnv();
+    const res = await worker.fetch(call("/api/live", { Upgrade: "websocket" }), env);
+    expect(res.status).toBe(401);
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects an authenticated request without the Upgrade header with 426", async () => {
+    const { env, calls } = makeEnv();
+    const res = await worker.fetch(call("/api/live", { Authorization: `Bearer ${WORKER_API_KEY}` }), env);
+    expect(res.status).toBe(426);
+    expect(calls).toEqual([]);
+  });
+
+  it("forwards an authenticated upgrade to the DO", async () => {
+    const { env, calls } = makeEnv();
+    const res = await worker.fetch(call("/api/live", { Authorization: `Bearer ${WORKER_API_KEY}`, Upgrade: "websocket" }), env);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ from: "do", url: "http://do/live" });
+    expect(calls).toEqual(["http://do/live"]);
   });
 });
 

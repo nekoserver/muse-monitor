@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>muse-monitor live</title>
+<style>
+  body { font-family: sans-serif; margin: 1em; background: #111; color: #ddd; }
+  h1 { font-size: 1.2em; display: inline-block; margin-right: 1em; }
+  h2 { font-size: 1.05em; margin: .4em 0; }
+  section.card { border: 1px solid #2a4d2a; border-radius: 6px; padding: .4em 1em 1em; margin: 1em 0; }
+  section.card.err { border-color: #7a2d2d; }
+  pre { background: #1b1b1b; border: 1px solid #333; border-radius: 6px;
+        padding: .6em 1em; overflow-x: auto; white-space: pre-wrap; margin: .4em 0; }
+  .meta { color: #999; font-size: .85em; }
+  #conn { font-size: .95em; }
+  #conn .ok { color: #6fbf6f; } #conn .bad { color: #e06c6c; }
+  button { background: #1e3a1e; color: #ddd; border: 1px solid #2a4d2a; border-radius: 4px; padding: .3em .9em; cursor: pointer; }
+</style></head>
+<body>
+<h1>muse-monitor live</h1>
+<span id="conn"><span class="bad">未接続</span></span>
+<button type="button" id="refresh">今すぐ更新</button>
+<p class="meta">WebSocket で 10 秒ごとに全セクションを受信します。接続できない場合は、先に <a href="/" style="color:#8ab">ダッシュボード</a> でログインしてください（認証 Cookie が必要です）。</p>
+<div id="nodebar"></div>
+<div id="cards"></div>
+<script>
+  const SECTIONS = [
+    ["status", "状態（tailscaled / Bridge）"],
+    ["diag", "診断サマリ（全33項目）"],
+    ["sdkhealth", "SDK ヘルス"],
+    ["sdkprofiles", "SDK プロファイル"],
+    ["sdksessions", "SDK セッション"],
+    ["sdkts", "SDK ヘルス（TypeScript）"],
+    ["jobs", "ジョブキュー"],
+    ["pending", "承認待ち"],
+    ["execlog", "実行監査ログ"],
+    ["pkgs", "パッケージ版数"],
+    ["vm", "VM 情報"],
+    ["procs", "プロセス上位"],
+    ["ports", "待ち受けポート"],
+    ["git", "git 状態"],
+    ["recent", "直近の完了ジョブ"],
+    ["hooks", "Hooks 状態"]
+  ];
+  const cardsEl = document.getElementById("cards");
+  const pres = {}, cardEls = {}, metas = {};
+  for (const [name, label] of SECTIONS) {
+    const sec = document.createElement("section");
+    sec.className = "card";
+    const h = document.createElement("h2"); h.textContent = label + "（" + name + "）";
+    const meta = document.createElement("div"); meta.className = "meta"; meta.textContent = "未受信";
+    const pre = document.createElement("pre"); pre.textContent = "";
+    sec.append(h, meta, pre);
+    cardsEl.appendChild(sec);
+    pres[name] = pre; cardEls[name] = sec; metas[name] = meta;
+  }
+  const connEl = document.getElementById("conn");
+  const nodebar = document.getElementById("nodebar");
+  let ws = null, retryMs = 2000;
+  function setConn(ok, text) {
+    connEl.innerHTML = "";
+    const s = document.createElement("span");
+    s.className = ok ? "ok" : "bad"; s.textContent = text;
+    connEl.appendChild(s);
+  }
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(proto + "//" + location.host + "/api/live");
+    ws.onopen = () => { retryMs = 2000; setConn(true, "接続中"); };
+    ws.onmessage = (ev) => {
+      let f; try { f = JSON.parse(ev.data); } catch { return; }
+      if (f.type === "node") {
+        nodebar.innerHTML = "";
+        const p = document.createElement("p");
+        p.className = "meta";
+        p.textContent = "ノード状態: " + f.node + (f.loginPending ? "（ログイン待ち）" : "") + " — セクションはノード復帰後に配信されます";
+        nodebar.appendChild(p);
+        return;
+      }
+      if (f.type !== "section" || !pres[f.section]) return;
+      const body = f.body || {};
+      const text = typeof body.output === "string" ? body.output
+        : (body.error ? ("エラー: " + body.error + (body.message ? " — " + body.message : "")) : JSON.stringify(body, null, 2));
+      pres[f.section].textContent = text;
+      cardEls[f.section].classList.toggle("err", f.status !== 200);
+      metas[f.section].textContent = "更新: " + new Date(f.at).toLocaleTimeString("ja-JP") + (f.status !== 200 ? "（HTTP " + f.status + "）" : "");
+    };
+    ws.onclose = () => {
+      setConn(false, "切断 — " + Math.round(retryMs / 1000) + "秒後に再接続");
+      setTimeout(connect, retryMs);
+      retryMs = Math.min(retryMs * 2, 30000);
+    };
+    ws.onerror = () => { try { ws.close(); } catch {} };
+  }
+  document.getElementById("refresh").onclick = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send("refresh");
+  };
+  connect();
+</script>
+</body></html>

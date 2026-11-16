@@ -42,7 +42,7 @@ interface Env {
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 15;
+const MONITOR_REVISION = 18;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -415,6 +415,23 @@ export default {
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
       const stub = env.MONITOR_GATEWAY.get(id);
       return stub.fetch(`http://do/monitor/${section}`);
+    }
+
+    if (url.pathname === "/api/live" && request.method === "GET") {
+      // ライブ表示ページ用 WebSocket (REQ-SEC-037)。認証は upgrade の前に済ませる。
+      const byKey = bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY);
+      if (!byKey && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
+        audit("/api/live", "none", "rejected");
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+        audit("/api/live", byKey ? "bearer" : "cookie", "rejected");
+        return Response.json({ error: "websocket upgrade required" }, { status: 426 });
+      }
+      audit("/api/live", byKey ? "bearer" : "cookie", "accepted");
+      const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
+      const stub = env.MONITOR_GATEWAY.get(id);
+      return stub.fetch("http://do/live", request);
     }
 
     return Response.json({ error: "not found" }, { status: 404 });

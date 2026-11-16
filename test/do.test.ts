@@ -73,18 +73,35 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
+class FakeSocket {
+  sent: string[] = [];
+  closed = false;
+  send(data: string) { this.sent.push(data); }
+  close() { this.closed = true; }
+}
+class FakeWebSocketPair {
+  0 = new FakeSocket();
+  1 = new FakeSocket();
+}
+
 function makeCtx(initial: Record<string, unknown> = {}) {
   const stored = new Map<string, unknown>(Object.entries(initial));
   const waits: Promise<unknown>[] = [];
+  const sockets: FakeSocket[] = [];
+  let alarmAt: number | null = null;
   const ctx = {
     storage: {
       get: async (k: string) => stored.get(k),
       put: async (k: string, v: unknown) => { stored.set(k, structuredClone(v)); },
       delete: async (k: string) => { stored.delete(k); },
+      setAlarm: async (t: number) => { alarmAt = t; },
+      getAlarm: async () => alarmAt,
     },
     waitUntil: (p: Promise<unknown>) => { waits.push(p); },
+    acceptWebSocket: (ws: FakeSocket) => { sockets.push(ws); },
+    getWebSockets: () => sockets,
   };
-  return { ctx: ctx as unknown as DurableObjectState, stored, waits };
+  return { ctx: ctx as unknown as DurableObjectState, stored, waits, sockets, alarmAt: () => alarmAt };
 }
 const ENV = { TS_AUTHKEY: "tskey-auth-secret", TS_API_KEY: "receiver-key-secret" };
 const gateway = (env: Record<string, string> = ENV, ctx = makeCtx().ctx) => new MonitorGateway(ctx, env as never);
@@ -495,7 +512,7 @@ describe("node state persistence", () => {
     await Promise.all(store.waits);
     expect(store.stored.get("ts-state")).toEqual({ "_current-profile": "profile-1" });
 
-    const next = gateway(ENV, makeCtx({ "ts-state": store.stored.get("ts-state") }).ctx);
+    const next = gateway(ENV, makeCtx({ "ts-state": store.stored.get("ts-state"), "ts-state-epoch": 1 }).ctx);
     onStart = (node) => queueMicrotask(() => node.up());
     await get(next, "/monitor/jobs");
     expect(nodes[1].config.stateStorage.getState("_current-profile")).toBe("profile-1");
@@ -503,7 +520,7 @@ describe("node state persistence", () => {
   });
 
   it("with persisted state, resumes from the state: no auth key is passed and login is not called", async () => {
-    const gw = gateway(ENV, makeCtx({ "ts-state": { "_current-profile": "profile-1" } }).ctx);
+    const gw = gateway(ENV, makeCtx({ "ts-state": { "_current-profile": "profile-1" }, "ts-state-epoch": 1 }).ctx);
     onStart = (node) => queueMicrotask(() => node.up());
     const res = await get(gw, "/monitor/jobs");
     expect(res.status).toBe(200);
@@ -512,7 +529,7 @@ describe("node state persistence", () => {
   });
 
   it("with persisted state that asks for login (NeedsLogin), uses the key for exactly one deferred login", async () => {
-    const gw = gateway(ENV, makeCtx({ "ts-state": { "_current-profile": "profile-1" } }).ctx);
+    const gw = gateway(ENV, makeCtx({ "ts-state": { "_current-profile": "profile-1" }, "ts-state-epoch": 1 }).ctx);
     onStart = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
     const res = await get(gw, "/monitor/jobs");
     expect(res.status).toBe(200);
@@ -532,7 +549,7 @@ describe("node state persistence", () => {
 });
 
 describe("DO recovery (SPEC REQ-SEC-026/027/028)", () => {
-  const SEEDED = { "ts-state": { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" } };
+  const SEEDED = { "ts-state": { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" }, "ts-state-epoch": 1 };
 
   it("discards a persisted state whose node never leaves NoState, and rejoins with the auth key", async () => {
     vi.useFakeTimers();
@@ -595,7 +612,7 @@ describe("state integrity at load (SPEC REQ-SEC-033)", () => {
 
   for (const [name, bad] of BAD_STATES) {
     it(`discards the state before starting the node when ${name}, and joins fresh`, async () => {
-      const store = makeCtx({ "ts-state": bad });
+      const store = makeCtx({ "ts-state": bad, "ts-state-epoch": 1 });
       const gw = gateway(ENV, store.ctx);
       const res = await get(gw, "/monitor/jobs");
       expect(res.status).toBe(200);
@@ -609,13 +626,116 @@ describe("state integrity at load (SPEC REQ-SEC-033)", () => {
   }
 
   it("keeps a structurally intact state and resumes from it", async () => {
-    const store = makeCtx({ "ts-state": { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" } });
+    const store = makeCtx({ "ts-state": { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" }, "ts-state-epoch": 1 });
     const gw = gateway(ENV, store.ctx);
     onStart = (node) => queueMicrotask(() => node.up());
     const res = await get(gw, "/monitor/jobs");
     expect(res.status).toBe(200);
     expect(nodes[0].config.authKey).toBeUndefined();
     expect(nodes[0].login).not.toHaveBeenCalled();
+  });
+});
+
+describe("one-time state reset at load (revision 17 recovery)", () => {
+  const INTACT = { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" };
+
+  it("discards a state stored before the reset epoch, joins fresh, and records the epoch", async () => {
+    const store = makeCtx({ "ts-state": INTACT });
+    const gw = gateway(ENV, store.ctx);
+    const res = await get(gw, "/monitor/jobs");
+    expect(res.status).toBe(200);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].config.authKey).toBe("tskey-auth-secret");
+    expect(nodes[0].login).toHaveBeenCalledWith("tskey-auth-secret");
+    expect(store.stored.get("ts-state-epoch")).toBe(1);
+    const status = await (await get(gw, "/status")).json();
+    expect(status.lastError).toContain("one-time reset");
+  });
+
+  it("keeps a state stored at the reset epoch and resumes from it", async () => {
+    const store = makeCtx({ "ts-state": INTACT, "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    onStart = (node) => queueMicrotask(() => node.up());
+    const res = await get(gw, "/monitor/jobs");
+    expect(res.status).toBe(200);
+    expect(nodes[0].config.authKey).toBeUndefined();
+    expect(nodes[0].login).not.toHaveBeenCalled();
+  });
+});
+
+describe("live WebSocket (REQ-SEC-037)", () => {
+  const RealResponse = globalThis.Response;
+  class WsResponse extends RealResponse {
+    webSocket?: unknown;
+    constructor(body?: BodyInit | null, init?: ResponseInit & { webSocket?: unknown }) {
+      super(body, init?.status === 101 ? { ...init, status: 200 } : init);
+      if (init?.status === 101) {
+        Object.defineProperty(this, "status", { value: 101 });
+        this.webSocket = init.webSocket;
+      }
+    }
+  }
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).WebSocketPair = FakeWebSocketPair;
+    (globalThis as Record<string, unknown>).Response = WsResponse;
+  });
+  afterEach(() => {
+    (globalThis as Record<string, unknown>).Response = RealResponse;
+    delete (globalThis as Record<string, unknown>).WebSocketPair;
+  });
+  const liveReq = () => new Request("http://do/live", { headers: { Upgrade: "websocket" } });
+
+  it("rejects a non-upgrade request with 426", async () => {
+    const gw = gateway(ENV, makeCtx({ "ts-state-epoch": 1 }).ctx);
+    const res = await gw.fetch(new Request("http://do/live"));
+    expect(res.status).toBe(426);
+  });
+
+  it("accepts the socket, returns 101 and arms the alarm", async () => {
+    const store = makeCtx({ "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    const res = await gw.fetch(liveReq());
+    expect(res.status).toBe(101);
+    expect(store.sockets).toHaveLength(1);
+    expect(store.alarmAt()).not.toBeNull();
+  });
+
+  it("on alarm, broadcasts every section to the connected sockets and re-arms", async () => {
+    const store = makeCtx({ "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    await get(gw, "/monitor/jobs"); // bring the node up
+    await gw.fetch(liveReq());
+    const sock = store.sockets[0];
+    // The connect itself kicks a sweep; wait for it to finish before measuring the alarm sweep.
+    await vi.waitFor(() => expect(sock.sent.length).toBe(16));
+    sock.sent.length = 0;
+    const before = store.alarmAt();
+    await gw.alarm();
+    const frames = sock.sent.map((s) => JSON.parse(s) as { type: string; section?: string; status?: number });
+    expect(frames).toHaveLength(16);
+    expect(frames.every((f) => f.type === "section" && f.status === 200)).toBe(true);
+    expect(new Set(frames.map((f) => f.section))).toEqual(new Set(["status", "diag", "jobs", "pkgs", "vm", "procs", "ports", "git", "recent", "pending", "execlog", "sdkhealth", "sdkprofiles", "sdksessions", "sdkts", "hooks"]));
+    expect(store.alarmAt()).not.toBeNull();
+    expect(store.alarmAt()).not.toBe(before);
+  });
+
+  it("on alarm with no sockets connected, does not re-arm and does not start the node", async () => {
+    const store = makeCtx({ "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    await gw.alarm();
+    expect(store.alarmAt()).toBeNull();
+    expect(nodes).toHaveLength(0);
+  });
+
+  it("while the node is not Running, broadcasts a node frame instead of sections", async () => {
+    const store = makeCtx({ "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    await gw.fetch(liveReq());
+    const sock = store.sockets[0];
+    const frames = sock.sent.map((s) => JSON.parse(s) as { type: string; node?: string });
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames[0]).toMatchObject({ type: "node", node: "not-started" });
+    expect(frames.every((f) => f.type === "node")).toBe(true);
   });
 });
 

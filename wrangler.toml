@@ -4,6 +4,9 @@ compatibility_date = "2026-11-10"
 
 # The receiver address (muse-vm, tailnet :8090) is a fixed counterpart
 # and is held as a constant in src/do.ts, not as a variable here.
+[assets]
+directory = "./public"
+
 [durable_objects]
 bindings = [
   { name = "MONITOR_GATEWAY", class_name = "MonitorGateway" }

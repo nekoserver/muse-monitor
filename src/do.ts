@@ -57,6 +57,17 @@ const RECEIVER_NAME = "muse-vm";
 const RECEIVER_PORT = 8090;
 
 const STATE_KEY = "ts-state";
+const STATE_EPOCH_KEY = "ts-state-epoch";
+/**
+ * One-time state reset epoch (revision 17). The state left behind by the
+ * failed revision-16 rejoins resumes into a silent NeedsLogin loop and
+ * offers no interactive login URL, so it can neither be used nor
+ * approved. When the stored epoch differs, loadState discards the state
+ * once so the next start is a clean first join. Bump this only as a
+ * deliberate recovery action; the marker lives in the same storage, so
+ * each value fires exactly once.
+ */
+const STATE_EPOCH = 1;
 
 /**
  * Structural integrity of the persisted node state (REQ-SEC-033): a plain
@@ -80,6 +91,8 @@ const SECTIONS = new Set([
   "ports", "git", "recent", "pending", "execlog", "sdkhealth",
   "sdkprofiles", "sdksessions", "sdkts", "hooks",
 ]);
+/** Live page sweep interval while at least one WebSocket client is connected (REQ-SEC-037). */
+const LIVE_INTERVAL_MS = 10_000;
 
 /** How many extra probes, and how far apart, before answering receiver_not_found. */
 export const RECEIVER_RETRIES = 2;
@@ -137,6 +150,22 @@ export class MonitorGateway extends DurableObject<Env> {
 
   private async loadState(): Promise<void> {
     if (this.stateLoaded) return;
+    const epoch = await this.ctx.storage.get<number>(STATE_EPOCH_KEY);
+    if (epoch !== STATE_EPOCH) {
+      const existing = await this.ctx.storage.get<Record<string, string>>(STATE_KEY);
+      try {
+        await this.ctx.storage.delete(STATE_KEY);
+        await this.ctx.storage.put(STATE_EPOCH_KEY, STATE_EPOCH);
+        if (existing !== undefined) {
+          this.lastError = "discarded the persisted node state at load: one-time reset (revision 17)";
+        }
+      } catch {
+        // The reset bookkeeping must never block the node start; if the
+        // epoch was not recorded, the reset simply runs again next load.
+      }
+      this.stateLoaded = true;
+      return;
+    }
     const stored = await this.ctx.storage.get<Record<string, string>>(STATE_KEY);
     if (stored !== undefined && !stateIsIntact(stored)) {
       // REQ-SEC-033: never start the node on a state that fails the
@@ -323,6 +352,7 @@ export class MonitorGateway extends DurableObject<Env> {
     const url = new URL(request.url);
     if (url.pathname === "/status") return this.status();
     if (url.pathname === "/public-status") return this.publicStatus();
+    if (url.pathname === "/live") return this.live(request);
     if (url.pathname === "/hmac-claim") {
       if (request.method !== "POST") return Response.json({ error: "not found" }, { status: 404 });
       return this.hmacClaim(request);
@@ -531,6 +561,74 @@ export class MonitorGateway extends DurableObject<Env> {
       });
     this.ctx.waitUntil(flushed);
     return Response.json({ ok: true });
+  }
+
+  /**
+   * Live page WebSocket (REQ-SEC-037). The Worker has already authenticated
+   * the upgrade (Bearer or login cookie); here we only accept the socket.
+   * Hibernation (acceptWebSocket + alarm) keeps the connection and the sweep
+   * alive across DO eviction.
+   */
+  private live(request: Request): Response {
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+      return Response.json({ error: "websocket upgrade required" }, { status: 426 });
+    }
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    this.ctx.acceptWebSocket(server);
+    void this.sweepLive();
+    void this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /** Periodic sweep while clients are connected; stops when none remain. */
+  async alarm(): Promise<void> {
+    if (this.ctx.getWebSockets().length === 0) return;
+    await this.sweepLive();
+    await this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
+  }
+
+  private async sweepLive(): Promise<void> {
+    const sockets = this.ctx.getWebSockets();
+    if (sockets.length === 0) return;
+    const send = (frame: unknown) => {
+      const text = JSON.stringify(frame);
+      for (const ws of sockets) {
+        try { ws.send(text); } catch { /* a closing socket must not stop the sweep */ }
+      }
+    };
+    if (this.lastStatus !== "Running") {
+      send({ type: "node", node: this.lastStatus, loginPending: Boolean(this.browseUrl), at: Date.now() });
+      // Keep the node starting in the background, as /health does.
+      if (!this.ipn) this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+      return;
+    }
+    for (const section of SECTIONS) {
+      let frame: Record<string, unknown>;
+      try {
+        const res = await this.monitor(section);
+        const body: unknown = await res.json().catch(() => null);
+        frame = { type: "section", section, status: res.status, body, at: Date.now() };
+      } catch (err) {
+        frame = { type: "section", section, status: 502, body: { error: "tailnet_unavailable", message: String(err) }, at: Date.now() };
+      }
+      send(frame);
+    }
+  }
+
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
+    // Clients only listen; the text "refresh" asks for an immediate sweep.
+    void ws;
+    if (typeof message === "string" && message === "refresh") void this.sweepLive();
+  }
+
+  webSocketClose(ws: WebSocket, code: number, reason: string): void {
+    try { ws.close(code, reason); } catch { /* already closed */ }
+  }
+
+  webSocketError(ws: WebSocket): void {
+    try { ws.close(1011, "error"); } catch { /* already closed */ }
   }
 
   /** Node status for diagnostics (no secrets). */
