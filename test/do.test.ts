@@ -423,10 +423,14 @@ describe("GET /public-status (for /health, no secrets)", () => {
     const gw = gateway();
     await get(gw, "/monitor/jobs");
     const text = await (await get(gw, "/public-status")).text();
-    expect(JSON.parse(text)).toEqual({
+    const { bootLog, ...rest } = JSON.parse(text) as Record<string, unknown>;
+    expect(rest).toEqual({
       node: "Running", ip: "100.99.0.5", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
       receiverPort: 8090, receiverProbes: [{ name: "muse-vm", result: "ok" }], lastError: null,
     });
+    // REQ-SEC-045: the recent boot attempts ride along (last 5).
+    expect(bootLog).toHaveLength(1);
+    expect((bootLog as Array<Record<string, unknown>>)[0]).toMatchObject({ kind: "start", origin: "fresh", login: "immediate", outcome: "running" });
     for (const secret of ["100.86.29.77", "tskey-auth-secret", "receiver-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
   });
 
@@ -482,7 +486,7 @@ describe("GET /status", () => {
   it("before any request: not-started, without starting the node", async () => {
     const gw = gateway();
     expect(await (await get(gw, "/status")).json()).toEqual({
-      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_AUTHKEY",
+      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_AUTHKEY", bootLog: [],
     });
     expect(nodes).toHaveLength(0);
   });
@@ -780,5 +784,112 @@ describe("POST /hmac-claim (HMAC replay prevention, SPEC REQ-SEC-011/012)", () =
       expect(res.status).toBe(400);
     }
     expect((await gw.fetch(new Request("http://do/hmac-claim"))).status).toBe(404);
+  });
+});
+
+describe("boot log (SPEC REQ-SEC-044/045)", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  type Rec = Record<string, unknown>;
+  const storedLog = (store: ReturnType<typeof makeCtx>) => store.stored.get("ts-boot-log") as Rec[];
+
+  it("records a fresh start: origin, immediate login, transitions and the running outcome, persisted to storage", async () => {
+    const store = makeCtx();
+    const gw = gateway(ENV, store.ctx);
+    await get(gw, "/monitor/jobs");
+    await flush();
+    const log = storedLog(store);
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({ kind: "start", origin: "fresh", login: "immediate", outcome: "running", browseUrlOffered: false });
+    expect((log[0].transitions as Array<{ state: string }>).map((t) => t.state)).toContain("Running");
+    expect(typeof log[0].startedAt).toBe("string");
+  });
+
+  it("records a resumed start with a deferred login", async () => {
+    const store = makeCtx({ "ts-state": { "_current-profile": "profile-1" }, "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    onStart = (node) => queueMicrotask(() => { node.callbacks!.notifyState("NeedsLogin"); node.up(); });
+    await get(gw, "/monitor/jobs");
+    await flush();
+    expect(storedLog(store).at(-1)).toMatchObject({ kind: "start", origin: "persisted", login: "deferred", outcome: "running" });
+  });
+
+  it("records a NeedsLogin stall as a timeout with no browse URL offered (the shape of the current live stall)", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx();
+    const gw = gateway(ENV, store.ctx);
+    onLogin = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+    const last = storedLog(store).at(-1)!;
+    expect(last).toMatchObject({ kind: "start", outcome: "timeout", browseUrlOffered: false });
+    expect((last.transitions as Array<{ state: string }>).map((t) => t.state)).toEqual(["NeedsLogin"]);
+  });
+
+  it("closes an unfinished record as interrupted on the next load", async () => {
+    const open = { kind: "start", startedAt: "2026-11-18T00:00:00.000Z", origin: "fresh", login: "immediate", transitions: [{ state: "NeedsLogin", atMs: 1200 }], browseUrlOffered: false, outcome: null, detail: null };
+    const store = makeCtx({ "ts-boot-log": [open], "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    await get(gw, "/monitor/jobs");
+    await flush();
+    const log = storedLog(store);
+    expect(log[0].outcome).toBe("interrupted");
+    expect(log.at(-1)).toMatchObject({ kind: "start", outcome: "running" });
+  });
+
+  it("records the recovery discard as its own entry with the reason", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx({ "ts-state": { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" }, "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    let starts = 0;
+    onStart = (node) => { starts++; if (starts === 1) queueMicrotask(() => node.callbacks!.notifyState("NoState")); };
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+    expect(storedLog(store).some((e) => e.kind === "state_discarded" && e.reason === "recovery")).toBe(true);
+  });
+
+  it("a failing boot-log write never blocks the node start", async () => {
+    const store = makeCtx();
+    const storage = store.ctx.storage as unknown as { put: (k: string, v: unknown) => Promise<void> };
+    const realPut = storage.put.bind(store.ctx.storage);
+    storage.put = async (k: string, v: unknown) => { if (k === "ts-boot-log") throw new Error("storage full"); return realPut(k, v); };
+    const gw = gateway(ENV, store.ctx);
+    const res = await get(gw, "/monitor/jobs");
+    expect(res.status).toBe(200);
+  });
+
+  it("caps the log at 50 entries, dropping the oldest", async () => {
+    const seeded = Array.from({ length: 50 }, (_, i) => ({ kind: "start", startedAt: `2026-11-01T00:00:${String(i).padStart(2, "0")}.000Z`, origin: "fresh", login: "immediate", transitions: [], browseUrlOffered: false, outcome: "timeout", detail: null }));
+    const store = makeCtx({ "ts-boot-log": seeded, "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    await get(gw, "/monitor/jobs");
+    await flush();
+    const log = storedLog(store);
+    expect(log.length).toBeLessThanOrEqual(50);
+    expect(log.at(-1)).toMatchObject({ outcome: "running" });
+  });
+
+  it("never writes key values or login URLs into the log", async () => {
+    onLogin = (node) => queueMicrotask(() => node.callbacks!.notifyPanicRecover("start failed via https://login.tailscale.com/a/xyz with tskey-auth-secret"));
+    const store = makeCtx();
+    const gw = gateway(ENV, store.ctx);
+    await get(gw, "/monitor/jobs");
+    await flush();
+    const text = JSON.stringify(store.stored.get("ts-boot-log"));
+    for (const secret of ["tskey-auth-secret", "receiver-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
+    expect(storedLog(store).at(-1)).toMatchObject({ kind: "start", outcome: "error" });
+  });
+
+  it("exposes the last 5 entries on /public-status and the last 20 on /status", async () => {
+    const seeded = Array.from({ length: 25 }, (_, i) => ({ kind: "start", startedAt: `2026-11-01T00:${String(i).padStart(2, "0")}:00.000Z`, origin: "fresh", login: "immediate", transitions: [], browseUrlOffered: false, outcome: "timeout", detail: null }));
+    const pubGw = gateway(ENV, makeCtx({ "ts-boot-log": seeded, "ts-state-epoch": 1 }).ctx);
+    const pub = await (await get(pubGw, "/public-status")).json();
+    expect(pub.bootLog).toHaveLength(5);
+
+    const stGw = gateway(ENV, makeCtx({ "ts-boot-log": seeded, "ts-state-epoch": 1 }).ctx);
+    const st = await (await get(stGw, "/status")).json();
+    expect(st.bootLog).toHaveLength(20);
+    expect(st.bootLog[0].startedAt).toBe(seeded[5].startedAt);
   });
 });

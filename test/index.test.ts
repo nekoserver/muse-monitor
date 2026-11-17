@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 24,
+      status: "ok", worker: "muse-monitor", revision: 25,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 24, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 25, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -484,5 +484,15 @@ describe("dashboard script", () => {
     // loadLoginState reads the node ip out of /health and prints it with the state.
     expect(html).toMatch(/function loadLoginState\(\) \{[\s\S]*?\.ip/);
     expect(html).toContain("IP: ");
+  });
+
+  it("shows the recent boot attempts next to the login state (REQ-SEC-045)", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    // A dedicated element sits with the login-state line, filled from the
+    // bootLog that /health carries (keyless, same source as the IP).
+    expect(html).toContain('id="bootlog"');
+    expect(html).toContain("直近の起動");
+    expect(html).toMatch(/function loadLoginState\(\) \{[\s\S]*?bootLog/);
   });
 });

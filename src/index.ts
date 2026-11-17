@@ -41,9 +41,10 @@ interface Env {
  * 9: 鍵の役割分離(TS_AUTHKEY=参加専用、TS_API_KEY=receiver専用)、HMACリプレイ防止、構造化監査ログ(SPEC.muse-monitor.security.hardening)。
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 23: 未認証時のグレーアウトに彩度落としを追加(REQ-SEC-041)。ログイン待ちの間、認証済み表示に Tailscale ログインへのリンクを出す(REQ-SEC-042)。
+ * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 24;
+const MONITOR_REVISION = 25;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -159,6 +160,7 @@ const DASHBOARD = `<!DOCTYPE html>
 </style></head><body>
 <h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
 <p id="loginstat" class="login-ng">ノードのログイン状態: 未ログイン（未取得）</p>
+<p id="bootlog" class="meta">直近の起動: 未取得</p>
 <p><a id="loginlink" href="#" target="_blank" rel="noopener" style="display:none">Tailscale ログインを承認する</a></p>
 <p id="authstat" class="login-ng">このブラウザのキー認証: 未認証</p>
 <p class="meta">実行系はここにはありません。依頼の受付はホスト側ダッシュボード、
@@ -279,6 +281,25 @@ const DASHBOARD = `<!DOCTYPE html>
       } else {
         el.className = 'login-ng';
         el.textContent = 'ノードのログイン状態: 未ログイン（状態: ' + (state ?? '不明') + '、IP: ' + ip + '）';
+      }
+      // 直近の起動試行を併記する(REQ-SEC-045)。NeedsLogin のまま終わった
+      // 試行が続いていることと、中断(前回の試行が途中で切れた証拠)が
+      // あることが、鍵なしの表示で見えるようにする。
+      const bl = document.getElementById('bootlog');
+      if (bl) {
+        const logs = (j.node && j.node.bootLog) || [];
+        if (logs.length) {
+          const last = logs[logs.length - 1];
+          const timeouts = logs.filter(r => r.kind === 'start' && r.outcome === 'timeout').length;
+          const cut = logs.some(r => r.outcome === 'interrupted');
+          bl.textContent = '直近の起動: ' + (last.startedAt ?? '-') +
+            ' / ' + (last.kind === 'state_discarded' ? '状態破棄（' + (last.reason ?? '-') + '）' : (last.origin === 'fresh' ? '新規' : '状態から復帰')) +
+            ' / ' + (last.outcome ?? '進行中') +
+            (timeouts ? '（時間切れ ' + timeouts + ' 件）' : '') +
+            (cut ? '（中断の記録あり）' : '');
+        } else {
+          bl.textContent = '直近の起動: 記録なし';
+        }
       }
     } catch (err) {
       el.className = 'login-ng';

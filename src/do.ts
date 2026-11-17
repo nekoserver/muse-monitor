@@ -82,6 +82,31 @@ function stateIsIntact(stored: unknown): boolean {
   for (const v of Object.values(stored)) if (typeof v !== "string") return false;
   return true;
 }
+/**
+ * Boot log (REQ-SEC-044): one record per node start attempt, plus one per
+ * state discard, kept in DO storage under its own key. Records are written
+ * directly to storage as the attempt unfolds — never through the in-memory
+ * state Map's asynchronous flush — because an eviction mid-attempt must
+ * not take the evidence with it: a record found without an outcome at the
+ * next load is closed as "interrupted", which is exactly that evidence.
+ * Records never contain key values or the login URL (only that one was
+ * offered); the detail text is sanitized with the public rules.
+ */
+const BOOT_LOG_KEY = "ts-boot-log";
+const BOOT_LOG_MAX = 50;
+
+type BootRecord = {
+  kind: "start" | "state_discarded";
+  startedAt: string;
+  origin: "fresh" | "persisted" | null;
+  login: "immediate" | "deferred" | "none" | null;
+  transitions: Array<{ state: string; atMs: number }>;
+  browseUrlOffered: boolean;
+  outcome: "running" | "timeout" | "error" | "interrupted" | null;
+  detail: string | null;
+  reason: "epoch-reset" | "integrity" | "recovery" | null;
+};
+
 const CLAIMS_KEY = "hmac-claims";
 /** How long an accepted HMAC signature is remembered: twice the ±300 s window. */
 const CLAIMS_TTL_S = 600;
@@ -108,6 +133,10 @@ export class MonitorGateway extends DurableObject<Env> {
   private pendingPanic: string | null = null;
   private state = new Map<string, string>();
   private stateLoaded = false;
+  /** Boot log mirror (REQ-SEC-044); null until first loaded from storage. */
+  private bootLog: BootRecord[] | null = null;
+  /** The in-flight start attempt being recorded, with its generation. */
+  private bootAttempt: { record: BootRecord; startedMs: number; gen: number } | null = null;
   /** Whether the current node was started from persisted state, and whether the one state-discarding recovery has been used. */
   private startedWithState = false;
   private recoveryDone = false;
@@ -163,6 +192,9 @@ export class MonitorGateway extends DurableObject<Env> {
         // The reset bookkeeping must never block the node start; if the
         // epoch was not recorded, the reset simply runs again next load.
       }
+      if (existing !== undefined) {
+        await this.recordStateDiscarded("epoch-reset", "discarded the persisted node state at load: one-time reset (revision 17)");
+      }
       this.stateLoaded = true;
       return;
     }
@@ -173,6 +205,7 @@ export class MonitorGateway extends DurableObject<Env> {
       // — a broken state must surface as a rejoin, not as a wedged node.
       this.lastError = "discarded the persisted node state at load: it failed the integrity check";
       await this.ctx.storage.delete(STATE_KEY);
+      await this.recordStateDiscarded("integrity", "discarded the persisted node state at load: it failed the integrity check");
     } else if (stored) {
       for (const [k, v] of Object.entries(stored)) this.state.set(k, v);
     }
@@ -187,6 +220,72 @@ export class MonitorGateway extends DurableObject<Env> {
         this.lastError = `state flush failed: ${String(err)}`;
       });
     this.ctx.waitUntil(this.flushPending);
+  }
+
+  /**
+   * Load the boot log once per DO instance. A start record still open at
+   * load was cut off mid-attempt (eviction or a crash): close it as
+   * "interrupted" — that classification is the evidence REQ-SEC-044 wants.
+   */
+  private async loadBootLog(): Promise<BootRecord[]> {
+    if (this.bootLog) return this.bootLog;
+    let log: BootRecord[] = [];
+    try {
+      const stored = await this.ctx.storage.get<BootRecord[]>(BOOT_LOG_KEY);
+      if (Array.isArray(stored)) log = stored;
+    } catch {
+      // A broken log must never block the node; start from an empty one.
+    }
+    let changed = false;
+    for (const r of log) {
+      if (r.kind === "start" && r.outcome === null) {
+        r.outcome = "interrupted";
+        changed = true;
+      }
+    }
+    this.bootLog = log.slice(-BOOT_LOG_MAX);
+    if (changed) await this.saveBootLog();
+    return this.bootLog;
+  }
+
+  /** Persist the boot log. Failures are swallowed: recording must never block the node start (REQ-SEC-044). */
+  private async saveBootLog(): Promise<void> {
+    if (!this.bootLog) return;
+    try {
+      await this.ctx.storage.put(BOOT_LOG_KEY, this.bootLog);
+    } catch {
+      // See above: the log is evidence, not a gate.
+    }
+  }
+
+  private async appendBoot(record: BootRecord): Promise<void> {
+    const log = await this.loadBootLog();
+    log.push(record);
+    while (log.length > BOOT_LOG_MAX) log.shift();
+    await this.saveBootLog();
+  }
+
+  private async recordStateDiscarded(reason: NonNullable<BootRecord["reason"]>, detail: string): Promise<void> {
+    await this.appendBoot({
+      kind: "state_discarded",
+      startedAt: new Date().toISOString(),
+      origin: null,
+      login: null,
+      transitions: [],
+      browseUrlOffered: false,
+      outcome: null,
+      detail: this.sanitizeForPublic(detail, 200),
+      reason,
+    });
+  }
+
+  /** Close the in-flight attempt record (once) from a wait failure: the 60 s timer is a timeout, anything else an error. */
+  private closeBootAttempt(err: unknown): void {
+    const attempt = this.bootAttempt;
+    if (!attempt || attempt.record.outcome !== null) return;
+    attempt.record.outcome = (err as { bootTimeout?: boolean } | null)?.bootTimeout ? "timeout" : "error";
+    attempt.record.detail = this.sanitizeForPublic(err instanceof Error ? err.message : String(err), 200);
+    void this.saveBootLog();
   }
 
   /**
@@ -208,10 +307,18 @@ export class MonitorGateway extends DurableObject<Env> {
       await this.waitForRunning();
       return ipn;
     } catch (err) {
+      this.closeBootAttempt(err);
       if (!this.recoveryEligible(err)) throw err;
       await this.discardStateForRecovery(err);
       const fresh = await this.startOnce();
-      if (this.lastStatus !== "Running") await this.waitForRunning();
+      if (this.lastStatus !== "Running") {
+        try {
+          await this.waitForRunning();
+        } catch (err2) {
+          this.closeBootAttempt(err2);
+          throw err2;
+        }
+      }
       return fresh;
     }
   }
@@ -242,6 +349,7 @@ export class MonitorGateway extends DurableObject<Env> {
     this.lastStatus = "not-started";
     this.state.clear();
     await this.ctx.storage.delete(STATE_KEY);
+    await this.recordStateDiscarded("recovery", String(err));
   }
 
   private waitForRunning(): Promise<void> {
@@ -263,19 +371,19 @@ export class MonitorGateway extends DurableObject<Env> {
           reject(err);
         },
       };
-      const timer = setTimeout(
-        () =>
-          waiter.reject(
-            new Error(
-              this.browseUrl
-                ? this.authKeySource()
-                  ? `the auth key from ${this.authKeySource()} was not accepted (expired, revoked or not an auth key?); the node is waiting for interactive login approval instead: ${this.browseUrl}`
-                  : `tailscale node is waiting for interactive login approval: ${this.browseUrl}`
-                : `tailscale node did not reach Running in 60s (state: ${this.lastStatus}, auth key from: ${this.authKeySource() ?? "none"})`,
-            ),
-          ),
-        60_000,
-      );
+      const timer = setTimeout(() => {
+        // bootTimeout marks this rejection as the 60 s wait expiring, so the
+        // boot log can classify the attempt as a timeout (REQ-SEC-044).
+        const err = new Error(
+          this.browseUrl
+            ? this.authKeySource()
+              ? `the auth key from ${this.authKeySource()} was not accepted (expired, revoked or not an auth key?); the node is waiting for interactive login approval instead: ${this.browseUrl}`
+              : `tailscale node is waiting for interactive login approval: ${this.browseUrl}`
+            : `tailscale node did not reach Running in 60s (state: ${this.lastStatus}, auth key from: ${this.authKeySource() ?? "none"})`,
+        ) as Error & { bootTimeout?: boolean };
+        err.bootTimeout = true;
+        waiter.reject(err);
+      }, 60_000);
       this.waiters.add(waiter);
     });
   }
@@ -291,35 +399,73 @@ export class MonitorGateway extends DurableObject<Env> {
     this.startedWithState = hasState;
     const gen = ++this.nodeGeneration;
 
-    const go = new Go();
-    const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
-    void go.run(instance);
+    // REQ-SEC-044: the attempt record opens before anything can fail, and
+    // is written directly to storage — not via the state Map's flush.
+    const record: BootRecord = {
+      kind: "start",
+      startedAt: new Date().toISOString(),
+      origin: hasState ? "persisted" : "fresh",
+      login: hasState ? "none" : "immediate",
+      transitions: [],
+      browseUrlOffered: false,
+      outcome: null,
+      detail: null,
+      reason: null,
+    };
+    this.bootAttempt = { record, startedMs: Date.now(), gen };
+    await this.appendBoot(record);
+
     const auth = hasState ? null : this.authKey();
-    const created = newIPN({
-      ...(auth ? { authKey: auth.value } : {}),
-      hostname: NODE_HOSTNAME,
-      ephemeral: false,
-      logUpload: false,
-      stateStorage: {
-        getState: (id: string) => this.state.get(id) ?? "",
-        setState: (id: string, value: string) => {
-          this.state.set(id, value);
-          this.flushState();
+    let ipn: IPN;
+    try {
+      const go = new Go();
+      const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
+      void go.run(instance);
+      const created = newIPN({
+        ...(auth ? { authKey: auth.value } : {}),
+        hostname: NODE_HOSTNAME,
+        ephemeral: false,
+        logUpload: false,
+        stateStorage: {
+          getState: (id: string) => this.state.get(id) ?? "",
+          setState: (id: string, value: string) => {
+            this.state.set(id, value);
+            this.flushState();
+          },
         },
-      },
-    });
-    if (created instanceof Error) {
-      throw new Error(`newIPN failed: ${created.message}`);
+      });
+      if (created instanceof Error) {
+        throw new Error(`newIPN failed: ${created.message}`);
+      }
+      ipn = created;
+    } catch (err) {
+      this.closeBootAttempt(err);
+      throw err;
     }
-    const ipn = created;
 
     let deferredLoginDone = false;
     const callbacks: IPNCallbacks = {
       notifyState: (state: string) => {
         if (gen !== this.nodeGeneration) return;
         this.lastStatus = state;
+        // REQ-SEC-044: record the transition on the in-flight attempt.
+        const attempt = this.bootAttempt;
+        if (attempt && attempt.gen === gen) {
+          const last = attempt.record.transitions.at(-1);
+          if (!last || last.state !== state) {
+            attempt.record.transitions.push({ state, atMs: Date.now() - attempt.startedMs });
+          }
+          if (state === "Running" && attempt.record.outcome === null) {
+            attempt.record.outcome = "running";
+          }
+          void this.saveBootLog();
+        }
         if (state === "NeedsLogin" && hasState && !deferredLoginDone) {
           deferredLoginDone = true;
+          if (attempt && attempt.gen === gen) {
+            attempt.record.login = "deferred";
+            void this.saveBootLog();
+          }
           ipn.login(this.authKey()?.value);
         }
         if (state !== "Running") return;
@@ -333,6 +479,12 @@ export class MonitorGateway extends DurableObject<Env> {
       notifyBrowseToURL: (url: string) => {
         if (gen !== this.nodeGeneration) return;
         this.browseUrl = url;
+        // REQ-SEC-044: record only that a URL was offered, never the URL.
+        const attempt = this.bootAttempt;
+        if (attempt && attempt.gen === gen) {
+          attempt.record.browseUrlOffered = true;
+          void this.saveBootLog();
+        }
       },
       notifyPanicRecover: (error: string) => {
         if (gen !== this.nodeGeneration) return;
@@ -658,6 +810,9 @@ export class MonitorGateway extends DurableObject<Env> {
       receiverPort: this.resolver.probePort,
       receiverProbes: this.resolver.lastProbes,
       lastError: this.publicErrorSummary(),
+      // 起動記録の直近5件(REQ-SEC-045)。lastError と同格の情報だけが入って
+      // おり、ログイン URL と鍵の値は含まれない(REQ-SEC-044)。
+      bootLog: (await this.loadBootLog()).slice(-5),
     });
   }
 
@@ -669,12 +824,17 @@ export class MonitorGateway extends DurableObject<Env> {
    */
   private publicErrorSummary(): string | null {
     if (!this.lastError) return null;
-    let s = this.lastError;
+    return this.sanitizeForPublic(this.lastError, 120);
+  }
+
+  /** Strip key values, URLs and IP addresses, collapse whitespace, and cap the length (REQ-SEC-031 rules). */
+  private sanitizeForPublic(text: string, cap: number): string {
+    let s = text;
     for (const secret of [this.authKey()?.value, this.receiverKey()?.value]) {
       if (secret) s = s.split(secret).join("[redacted]");
     }
     s = s.replace(/https?:\/\/\S+/g, "[url]").replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "[ip]").replace(/\s+/g, " ").trim();
-    return s.length > 120 ? `${s.slice(0, 120)}…` : s;
+    return s.length > cap ? `${s.slice(0, cap)}…` : s;
   }
 
   async status(): Promise<Response> {
@@ -686,6 +846,7 @@ export class MonitorGateway extends DurableObject<Env> {
         loginUrl: this.browseUrl,
         authKeyConfigured: Boolean(this.authKey()),
         authKeySource: this.authKeySource(),
+        bootLog: (await this.loadBootLog()).slice(-20),
       });
     }
     const raw = this.ipn.status();
@@ -703,6 +864,7 @@ export class MonitorGateway extends DurableObject<Env> {
       loginUrl: this.browseUrl,
       authKeyConfigured: Boolean(this.authKey()),
         authKeySource: this.authKeySource(),
+      bootLog: (await this.loadBootLog()).slice(-20),
       receiver: {
         baseName: RECEIVER_NAME,
         resolvedIp: this.resolver.cachedIp,
