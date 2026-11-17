@@ -419,15 +419,21 @@ describe("GET /public-status (for /health, no secrets)", () => {
     expect(nodes).toHaveLength(1);
   });
 
-  it("after start: Running and whether muse-vm was found, never the IP, login URL or key values", async () => {
+  it("after start: Running, the node's own IP (REQ-SEC-043), and whether muse-vm was found — never the receiver's IP, login URL or key values", async () => {
     const gw = gateway();
     await get(gw, "/monitor/jobs");
     const text = await (await get(gw, "/public-status")).text();
     expect(JSON.parse(text)).toEqual({
-      node: "Running", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
+      node: "Running", ip: "100.99.0.5", authKeySource: "TS_AUTHKEY", receiverKeySource: "TS_API_KEY", loginPending: false, receiverCandidates: 1, receiverResolved: true,
       receiverPort: 8090, receiverProbes: [{ name: "muse-vm", result: "ok" }], lastError: null,
     });
     for (const secret of ["100.86.29.77", "tskey-auth-secret", "receiver-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
+  });
+
+  it("ip is null while the node has not joined (no self node in the netmap yet)", async () => {
+    const gw = gateway({ TS_AUTHKEY: "join-key", TS_API_KEY: "k" });
+    const first = await (await get(gw, "/public-status")).json();
+    expect(first).toMatchObject({ node: "not-started", ip: null });
   });
 
   it("when Running but the receiver is not resolved yet, probes it in the background and shows why it failed", async () => {

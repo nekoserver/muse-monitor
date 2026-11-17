@@ -43,7 +43,7 @@ interface Env {
  * 23: 未認証時のグレーアウトに彩度落としを追加(REQ-SEC-041)。ログイン待ちの間、認証済み表示に Tailscale ログインへのリンクを出す(REQ-SEC-042)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 23;
+const MONITOR_REVISION = 24;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -270,12 +270,15 @@ const DASHBOARD = `<!DOCTYPE html>
       const r = await fetch('/health');
       const j = await r.json();
       const state = j.node && j.node.node;
+      // 自ノードの IP を併記する(REQ-SEC-043)。色はログイン状態と同じ規則で、
+      // 修復(状態破棄と再参加)の前後で IP と色の変化が画面で分かる。
+      const ip = (j.node && j.node.ip) || '未割当';
       if (state === 'Running') {
         el.className = 'login-ok';
-        el.textContent = 'ノードのログイン状態: ログイン中';
+        el.textContent = 'ノードのログイン状態: ログイン中（IP: ' + ip + '）';
       } else {
         el.className = 'login-ng';
-        el.textContent = 'ノードのログイン状態: 未ログイン（状態: ' + (state ?? '不明') + '）';
+        el.textContent = 'ノードのログイン状態: 未ログイン（状態: ' + (state ?? '不明') + '、IP: ' + ip + '）';
       }
     } catch (err) {
       el.className = 'login-ng';
@@ -283,6 +286,8 @@ const DASHBOARD = `<!DOCTYPE html>
     }
   }
   function loadAll() { loadLoginState(); loadStatus(); for (const [name] of SECTIONS) load(name); }
+  // ログイン状態と IP は30秒ごとに取り直し、修復による変化を画面に映す(REQ-SEC-043)。
+  setInterval(loadLoginState, 30000);
   function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
   function card(name) {
     return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +

@@ -647,6 +647,9 @@ export class MonitorGateway extends DurableObject<Env> {
     }
     return Response.json({
       node: this.ipn ? this.lastStatus : "not-started",
+      // 自ノードの住所だけは出す(REQ-SEC-043)。修復で状態が破棄され再参加すると
+      // この値が変わるので、画面で変化を確認できる。他ノードの IP は出さない。
+      ip: candidatesFor(this.peers, NODE_HOSTNAME)[0]?.ip ?? null,
       authKeySource: this.authKeySource(),
       receiverKeySource: this.receiverKey()?.source ?? null,
       loginPending: this.lastStatus !== "Running" && Boolean(this.browseUrl),

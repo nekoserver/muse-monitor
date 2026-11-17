@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 23,
+      status: "ok", worker: "muse-monitor", revision: 24,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 23, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 24, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -476,5 +476,13 @@ describe("dashboard script", () => {
     expect(html).toMatch(/getElementById\('loginlink'\)/);
     // The keyless /health read must not be the source of the URL.
     expect(html).not.toMatch(/function loadLoginState\(\) \{[\s\S]*?loginUrl/);
+  });
+
+  it("shows the node's own IP next to the login state from the keyless /health (REQ-SEC-043)", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    // loadLoginState reads the node ip out of /health and prints it with the state.
+    expect(html).toMatch(/function loadLoginState\(\) \{[\s\S]*?\.ip/);
+    expect(html).toContain("IP: ");
   });
 });
