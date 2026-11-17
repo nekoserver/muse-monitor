@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 25,
+      status: "ok", worker: "muse-monitor", revision: 26,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 25, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 26, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -195,7 +195,11 @@ describe("login cookie: keeps the authenticated state for 7 days, never the key"
     expect(html).toContain('id="authbtn"');
     expect(html).toContain("/api/logout");
     expect(html).toMatch(/function headers\(\) \{[^}]*key\(\) \?/);
-    expect(html).not.toMatch(/localStorage|sessionStorage|document\.cookie/);
+    expect(html).not.toMatch(/localStorage|sessionStorage/);
+    // SPEC v19 (REQ-SEC-047): the script may READ the mm_mode mirror cookie
+    // (it holds only "manual"/"auto", never the key), but it never writes a
+    // cookie itself — the Worker sets the mirror on the /api/mode response.
+    expect(html).not.toMatch(/document\.cookie\s*=/);
   });
 });
 
@@ -494,5 +498,60 @@ describe("dashboard script", () => {
     expect(html).toContain('id="bootlog"');
     expect(html).toContain("直近の起動");
     expect(html).toMatch(/function loadLoginState\(\) \{[\s\S]*?bootLog/);
+  });
+
+  it("puts the hourly health chart at the top, with a mode setting and per-hour detail (REQ-SEC-046..049)", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    expect(html).toContain('id="healthchart"');
+    expect(html).toContain('id="chartdetail"');
+    expect(html).toContain('id="modesel"');
+    // The chart sits at the very top of the page, above the login-state line.
+    expect(html.indexOf('id="healthchart"')).toBeLessThan(html.indexOf('id="loginstat"'));
+    // The chart reads the keyless history endpoint and renders a detail per point.
+    expect(html).toContain("/health-history");
+    expect(html).toMatch(/function loadHistory\(\)/);
+    expect(html).toMatch(/function showHour\(/);
+    // The mode is changed through the authenticated route, never keyless.
+    expect(html).toContain("/api/mode");
+  });
+});
+
+describe("health history and mode setting (SPEC v19: REQ-SEC-047/049)", () => {
+  const postMode = (env: never, mode: unknown, headers: Record<string, string> = {}) =>
+    worker.fetch(new Request("https://muse-monitor.example/api/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ mode }),
+    }), env);
+
+  it("GET /health-history needs no key and proxies the DO's public history", async () => {
+    const { env, calls } = makeEnv();
+    const res = await worker.fetch(call("/health-history"), env);
+    expect(res.status).toBe(200);
+    expect(calls).toEqual(["http://do/public-history"]);
+  });
+
+  it("POST /api/mode without auth is 401 and never reaches the DO", async () => {
+    const { env, calls } = makeEnv();
+    const res = await postMode(env, "auto");
+    expect(res.status).toBe(401);
+    expect(calls).toEqual([]);
+  });
+
+  it("POST /api/mode with the key forwards to the DO and mirrors the choice in a cookie", async () => {
+    const { env, calls } = makeEnv();
+    const res = await postMode(env, "auto", { Authorization: `Bearer ${WORKER_API_KEY}` });
+    expect(res.status).toBe(200);
+    expect(calls).toEqual(["http://do/mode"]);
+    expect(res.headers.get("Set-Cookie") ?? "").toMatch(/^mm_mode=auto; /);
+  });
+
+  it("POST /api/mode rejects an unknown mode without reaching the DO", async () => {
+    const { env, calls } = makeEnv();
+    const res = await postMode(env, "bogus", { Authorization: `Bearer ${WORKER_API_KEY}` });
+    expect(res.status).toBe(400);
+    expect(calls).toEqual([]);
+    expect(res.headers.get("Set-Cookie")).toBeNull();
   });
 });

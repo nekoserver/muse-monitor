@@ -96,7 +96,7 @@ const BOOT_LOG_KEY = "ts-boot-log";
 const BOOT_LOG_MAX = 50;
 
 type BootRecord = {
-  kind: "start" | "state_discarded";
+  kind: "start" | "state_discarded" | "auto_recovery";
   startedAt: string;
   origin: "fresh" | "persisted" | null;
   login: "immediate" | "deferred" | "none" | null;
@@ -104,8 +104,32 @@ type BootRecord = {
   browseUrlOffered: boolean;
   outcome: "running" | "timeout" | "error" | "interrupted" | null;
   detail: string | null;
-  reason: "epoch-reset" | "integrity" | "recovery" | null;
+  reason: "epoch-reset" | "integrity" | "recovery" | "auto-recovery" | null;
+  /** When the attempt closed (null while open). Older records lack it; readers fall back to startedAt. */
+  endedAt: string | null;
+  /** Auto-recovery only: the persisted state's fingerprint (hash, never the state itself). */
+  fingerprint: string | null;
+  /** Auto-recovery only: what was decided at detection time. */
+  decision: "attempted" | "already-attempted" | null;
 };
+
+/**
+ * Hourly health samples, mode setting and auto-recovery bookkeeping
+ * (SPEC v19, REQ-SEC-046..048). All of it lives in DO storage under its
+ * own keys — no new env vars, secrets or bindings. The mode's authority
+ * is the DO copy; the dashboard's cookie is only a mirror for display.
+ */
+const SAMPLES_KEY = "ts-health-samples";
+const SAMPLES_MAX = 168; // 7 days of hourly samples
+const SAMPLE_INTERVAL_MS = 3_600_000;
+const NEXT_SAMPLE_KEY = "ts-health-next";
+const MODE_KEY = "ts-mode";
+const AUTO_RECOVERY_KEY = "ts-auto-recovery";
+/** After a failed start, keyless reads must not trigger another start for this long (REQ-SEC-050). */
+const START_COOLDOWN_MS = 300_000;
+
+type Mode = "manual" | "auto";
+type HealthSample = { at: string; state: string; outcome: BootRecord["outcome"]; ip: string | null };
 
 const CLAIMS_KEY = "hmac-claims";
 /** How long an accepted HMAC signature is remembered: twice the ±300 s window. */
@@ -145,6 +169,8 @@ export class MonitorGateway extends DurableObject<Env> {
   /** Accepted HMAC signatures (sig -> unix ts), for replay prevention. */
   private claims: Map<string, number> | null = null;
   private flushPending: Promise<void> | null = null;
+  /** When the last refresh-triggered live sweep ran (REQ-SEC-052 coalescing). */
+  private lastRefreshSweepAt = 0;
   private lastStatus = "not-started";
   private lastError: string | null = null;
   private browseUrl: string | null = null;
@@ -276,6 +302,9 @@ export class MonitorGateway extends DurableObject<Env> {
       outcome: null,
       detail: this.sanitizeForPublic(detail, 200),
       reason,
+      endedAt: null,
+      fingerprint: null,
+      decision: null,
     });
   }
 
@@ -285,6 +314,7 @@ export class MonitorGateway extends DurableObject<Env> {
     if (!attempt || attempt.record.outcome !== null) return;
     attempt.record.outcome = (err as { bootTimeout?: boolean } | null)?.bootTimeout ? "timeout" : "error";
     attempt.record.detail = this.sanitizeForPublic(err instanceof Error ? err.message : String(err), 200);
+    attempt.record.endedAt = new Date().toISOString();
     void this.saveBootLog();
   }
 
@@ -338,7 +368,7 @@ export class MonitorGateway extends DurableObject<Env> {
     return this.lastStatus === "NoState" || String(err).includes("could not start");
   }
 
-  private async discardStateForRecovery(err: unknown): Promise<void> {
+  private async discardStateForRecovery(err: unknown, reason: "recovery" | "auto-recovery" = "recovery"): Promise<void> {
     this.recoveryDone = true;
     this.nodeGeneration++; // the wedged node's callbacks must not touch the fresh node's tracking
     this.lastError = `discarded the persisted node state and rejoined with the auth key (recovery; cause: ${String(err).slice(0, 160)})`;
@@ -349,7 +379,7 @@ export class MonitorGateway extends DurableObject<Env> {
     this.lastStatus = "not-started";
     this.state.clear();
     await this.ctx.storage.delete(STATE_KEY);
-    await this.recordStateDiscarded("recovery", String(err));
+    await this.recordStateDiscarded(reason, String(err));
   }
 
   private waitForRunning(): Promise<void> {
@@ -411,6 +441,9 @@ export class MonitorGateway extends DurableObject<Env> {
       outcome: null,
       detail: null,
       reason: null,
+      endedAt: null,
+      fingerprint: null,
+      decision: null,
     };
     this.bootAttempt = { record, startedMs: Date.now(), gen };
     await this.appendBoot(record);
@@ -457,6 +490,7 @@ export class MonitorGateway extends DurableObject<Env> {
           }
           if (state === "Running" && attempt.record.outcome === null) {
             attempt.record.outcome = "running";
+            attempt.record.endedAt = new Date().toISOString();
           }
           void this.saveBootLog();
         }
@@ -501,9 +535,17 @@ export class MonitorGateway extends DurableObject<Env> {
 
   /** Durable Object entrypoint: /status, /monitor/<section>, /hmac-claim. */
   async fetch(request: Request): Promise<Response> {
+    // Keep the hourly sample chain armed even if an alarm was lost: every
+    // request re-arms it when no alarm is set (premise P10's mitigation).
+    await this.ensureSampleAlarm();
     const url = new URL(request.url);
     if (url.pathname === "/status") return this.status();
     if (url.pathname === "/public-status") return this.publicStatus();
+    if (url.pathname === "/public-history") return this.publicHistory();
+    if (url.pathname === "/mode") {
+      if (request.method !== "POST") return Response.json({ error: "not found" }, { status: 404 });
+      return this.setMode(request);
+    }
     if (url.pathname === "/live") return this.live(request);
     if (url.pathname === "/hmac-claim") {
       if (request.method !== "POST") return Response.json({ error: "not found" }, { status: 404 });
@@ -730,15 +772,38 @@ export class MonitorGateway extends DurableObject<Env> {
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
     void this.sweepLive();
-    void this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
+    void (async () => {
+      const nextSample = await this.nextSampleAt();
+      await this.ctx.storage.setAlarm(Math.min(nextSample, Date.now() + LIVE_INTERVAL_MS));
+    })();
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  /** Periodic sweep while clients are connected; stops when none remain. */
+  /**
+   * One alarm chain, two duties: the live sweep every 10 s while clients
+   * are connected (REQ-SEC-037), and the hourly health sample whether or
+   * not anyone is watching (REQ-SEC-046). The next alarm is whichever is
+   * due first, so the chain survives with no traffic at all.
+   */
   async alarm(): Promise<void> {
-    if (this.ctx.getWebSockets().length === 0) return;
-    await this.sweepLive();
-    await this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
+    const now = Date.now();
+    let nextSample = await this.nextSampleAt();
+    if (now >= nextSample) {
+      await this.takeSample();
+      nextSample = now + SAMPLE_INTERVAL_MS;
+      try {
+        await this.ctx.storage.put(NEXT_SAMPLE_KEY, nextSample);
+      } catch {
+        // The next fetch re-arms from the stored value; a lost write only
+        // makes the following sample early, never blocks anything.
+      }
+    }
+    let next = nextSample;
+    if (this.ctx.getWebSockets().length > 0) {
+      await this.sweepLive();
+      next = Math.min(next, now + LIVE_INTERVAL_MS);
+    }
+    await this.ctx.storage.setAlarm(next);
   }
 
   private async sweepLive(): Promise<void> {
@@ -771,8 +836,16 @@ export class MonitorGateway extends DurableObject<Env> {
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
     // Clients only listen; the text "refresh" asks for an immediate sweep.
+    // Refreshes are coalesced to at most one sweep per interval, however
+    // many arrive (REQ-SEC-052): a sweep walks all 16 sections through the
+    // node, so an uncoalesced refresh is a cheap way to keep the DO and
+    // the receiver busy.
     void ws;
-    if (typeof message === "string" && message === "refresh") void this.sweepLive();
+    if (typeof message !== "string" || message !== "refresh") return;
+    const now = Date.now();
+    if (now - this.lastRefreshSweepAt < LIVE_INTERVAL_MS) return;
+    this.lastRefreshSweepAt = now;
+    void this.sweepLive();
   }
 
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
@@ -788,11 +861,212 @@ export class MonitorGateway extends DurableObject<Env> {
    * /health 用(鍵なしで見える)。秘密を含まない: ログインURL・IPアドレス・鍵の値は出さない。
    * ログインURLが漏れると、他人がこのノードを自分のtailnetに取り込める恐れがあるため。
    */
+  /**
+   * The recovery mode (REQ-SEC-047): "manual" never auto-recovers (the
+   * behavior up to revision 25); "auto" lets the hourly sample attempt
+   * the bounded recovery of REQ-SEC-048. The DO copy is authoritative —
+   * the dashboard cookie only mirrors it for display. Any doubt (unset,
+   * corrupt, unreadable) resolves to "manual": never fall toward acting.
+   */
+  private async getMode(): Promise<Mode> {
+    try {
+      return (await this.ctx.storage.get<string>(MODE_KEY)) === "auto" ? "auto" : "manual";
+    } catch {
+      return "manual";
+    }
+  }
+
+  /** POST /mode (reached only through the authenticated Worker route). */
+  private async setMode(request: Request): Promise<Response> {
+    const body = (await request.json().catch(() => null)) as { mode?: unknown } | null;
+    if (body?.mode !== "manual" && body?.mode !== "auto") {
+      return Response.json({ error: "invalid mode" }, { status: 400 });
+    }
+    await this.ctx.storage.put(MODE_KEY, body.mode);
+    return Response.json({ mode: body.mode });
+  }
+
+  private async loadSamples(): Promise<HealthSample[]> {
+    try {
+      const stored = await this.ctx.storage.get<HealthSample[]>(SAMPLES_KEY);
+      return Array.isArray(stored) ? stored : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async nextSampleAt(): Promise<number> {
+    try {
+      return (await this.ctx.storage.get<number>(NEXT_SAMPLE_KEY)) ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Re-arm the sample chain when no alarm is set (premise P10: a lost chain must heal itself). */
+  private async ensureSampleAlarm(): Promise<void> {
+    try {
+      if ((await this.ctx.storage.getAlarm()) === null) {
+        await this.ctx.storage.setAlarm(await this.nextSampleAt());
+      }
+    } catch {
+      // Alarms are best-effort; alarm() itself re-arms on every fire.
+    }
+  }
+
+  /**
+   * The hourly sample (REQ-SEC-046): the node's state, the latest start
+   * attempt's outcome and the node's own IP, appended to a bounded ring.
+   * Sampling never discards state; like the read paths it kicks a
+   * background start when the node is down (hourly is bounded, so this
+   * start sits outside the keyless cooldown of REQ-SEC-050). In "auto"
+   * mode the sample is also where a stall is detected (REQ-SEC-048).
+   */
+  private async takeSample(): Promise<void> {
+    const log = await this.loadBootLog();
+    const lastStart = [...log].reverse().find((r) => r.kind === "start");
+    const sample: HealthSample = {
+      at: new Date().toISOString(),
+      state: this.ipn ? this.lastStatus : "not-started",
+      outcome: lastStart?.outcome ?? null,
+      ip: candidatesFor(this.peers, NODE_HOSTNAME)[0]?.ip ?? null,
+    };
+    try {
+      const samples = await this.loadSamples();
+      samples.push(sample);
+      while (samples.length > SAMPLES_MAX) samples.shift();
+      await this.ctx.storage.put(SAMPLES_KEY, samples);
+    } catch {
+      // A failed sample must never block anything else (REQ-SEC-046).
+    }
+    if (!this.ipn) {
+      this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+    }
+    if ((await this.getMode()) === "auto") await this.autoRecoverIfStalled(log);
+  }
+
+  /** SHA-256 of the persisted state's canonical form — an identifier for "this exact state", never the state itself. */
+  private async stateFingerprint(): Promise<string | null> {
+    try {
+      const stored = await this.ctx.storage.get<Record<string, string>>(STATE_KEY);
+      if (!stored || Object.keys(stored).length === 0) return null;
+      const canonical = JSON.stringify(Object.entries(stored).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+      return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Auto-recovery (REQ-SEC-048, "auto" mode only): the stall shape of
+   * premise P8 — a start resumed from persisted state that timed out in
+   * NeedsLogin with no login URL offered — gets exactly one
+   * discard-and-rejoin per distinct persisted state (its fingerprint,
+   * premise P11). A state that already used its attempt is left for a
+   * human; the skip is recorded once per fingerprint so the hourly
+   * samples cannot flood the boot log. A stall that offered a login URL
+   * is never touched: interactive login is the human's path (the same
+   * judgment as REQ-SEC-036).
+   */
+  private async autoRecoverIfStalled(log: BootRecord[]): Promise<void> {
+    const last = [...log].reverse().find((r) => r.kind === "start");
+    if (!last || last.origin !== "persisted" || last.outcome !== "timeout" || last.browseUrlOffered) return;
+    if (last.transitions.at(-1)?.state !== "NeedsLogin") return;
+    const fingerprint = await this.stateFingerprint();
+    if (!fingerprint) return;
+    type Attempt = { fingerprint: string; skipLogged: boolean };
+    let attempts: Attempt[] = [];
+    try {
+      const stored = await this.ctx.storage.get<Attempt[]>(AUTO_RECOVERY_KEY);
+      if (Array.isArray(stored)) attempts = stored;
+    } catch {
+      // Unreadable bookkeeping counts as "no attempt yet"; the boot log
+      // still records whatever happens next.
+    }
+    const prior = attempts.find((a) => a.fingerprint === fingerprint);
+    if (prior) {
+      if (!prior.skipLogged) {
+        prior.skipLogged = true;
+        try {
+          await this.ctx.storage.put(AUTO_RECOVERY_KEY, attempts);
+        } catch { /* the record below is the evidence; the flag is a courtesy */ }
+        await this.appendBoot({
+          kind: "auto_recovery",
+          startedAt: new Date().toISOString(),
+          origin: null,
+          login: null,
+          transitions: [],
+          browseUrlOffered: false,
+          outcome: null,
+          detail: "the same persisted state already used its one automatic recovery; leaving it for a human",
+          reason: null,
+          endedAt: null,
+          fingerprint,
+          decision: "already-attempted",
+        });
+      }
+      return;
+    }
+    attempts.push({ fingerprint, skipLogged: false });
+    while (attempts.length > 20) attempts.shift();
+    try {
+      await this.ctx.storage.put(AUTO_RECOVERY_KEY, attempts);
+    } catch { /* as above */ }
+    await this.appendBoot({
+      kind: "auto_recovery",
+      startedAt: new Date().toISOString(),
+      origin: null,
+      login: null,
+      transitions: [],
+      browseUrlOffered: false,
+      outcome: null,
+      detail: "persisted NeedsLogin stall detected at the hourly sample; discarding the state and rejoining once for this state",
+      reason: null,
+      endedAt: null,
+      fingerprint,
+      decision: "attempted",
+    });
+    await this.discardStateForRecovery(new Error("auto-recovery: persisted NeedsLogin stall detected at the hourly sample"), "auto-recovery");
+    this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+  }
+
+  /**
+   * Whether the last start attempt failed recently enough that a keyless
+   * read must not trigger another one (REQ-SEC-050). Starting the WASM
+   * node is the heaviest thing a keyless read can cause; without this
+   * cooldown, polling /health against a wedged node restarts it forever
+   * (security audit, confirmed finding 1).
+   */
+  private startOnCooldown(log: BootRecord[]): boolean {
+    const last = [...log].reverse().find((r) => r.kind === "start");
+    if (!last || (last.outcome !== "timeout" && last.outcome !== "error")) return false;
+    const endedMs = Date.parse(last.endedAt ?? last.startedAt);
+    return Number.isFinite(endedMs) && Date.now() - endedMs < START_COOLDOWN_MS;
+  }
+
+  /**
+   * Chart data (REQ-SEC-049): the hourly samples, the boot log and the
+   * current mode. Keyless like /public-status and strictly read-only —
+   * no node start, no section fetch, no writes (REQ-SEC-051). It carries
+   * nothing the public status does not already carry: no login URL, no
+   * key values, no other node's IP.
+   */
+  private async publicHistory(): Promise<Response> {
+    return Response.json({
+      samples: await this.loadSamples(),
+      bootLog: (await this.loadBootLog()).slice(-BOOT_LOG_MAX),
+      mode: await this.getMode(),
+    });
+  }
+
   async publicStatus(): Promise<Response> {
+    const log = await this.loadBootLog();
     // 鍵なしでも状態を確かめられるよう、ノードが無ければ起動を始める(待たない。起動は1回にまとめられる)。
-    if (!this.ipn) this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+    // ただし直近の試行が失敗したばかりなら、クールダウン中は始めない(REQ-SEC-050)。
+    if (!this.ipn && !this.startOnCooldown(log)) this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
     // ノードは動いているのに受信側が決まっていなければ、到達確認を裏で走らせる(結果は receiverProbes に出る)。
-    else if (this.lastStatus === "Running" && !this.resolver.cachedIp && !this.probing) {
+    else if (this.lastStatus === "Running" && this.ipn && !this.resolver.cachedIp && !this.probing) {
       const ipn = this.ipn;
       this.probing = true;
       this.ctx.waitUntil(this.resolveReceiver(ipn, true).catch(() => null).finally(() => { this.probing = false; }));
@@ -812,7 +1086,7 @@ export class MonitorGateway extends DurableObject<Env> {
       lastError: this.publicErrorSummary(),
       // 起動記録の直近5件(REQ-SEC-045)。lastError と同格の情報だけが入って
       // おり、ログイン URL と鍵の値は含まれない(REQ-SEC-044)。
-      bootLog: (await this.loadBootLog()).slice(-5),
+      bootLog: log.slice(-5),
     });
   }
 
@@ -847,6 +1121,7 @@ export class MonitorGateway extends DurableObject<Env> {
         authKeyConfigured: Boolean(this.authKey()),
         authKeySource: this.authKeySource(),
         bootLog: (await this.loadBootLog()).slice(-20),
+        mode: await this.getMode(),
       });
     }
     const raw = this.ipn.status();
@@ -865,6 +1140,7 @@ export class MonitorGateway extends DurableObject<Env> {
       authKeyConfigured: Boolean(this.authKey()),
         authKeySource: this.authKeySource(),
       bootLog: (await this.loadBootLog()).slice(-20),
+      mode: await this.getMode(),
       receiver: {
         baseName: RECEIVER_NAME,
         resolvedIp: this.resolver.cachedIp,

@@ -486,7 +486,7 @@ describe("GET /status", () => {
   it("before any request: not-started, without starting the node", async () => {
     const gw = gateway();
     expect(await (await get(gw, "/status")).json()).toEqual({
-      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_AUTHKEY", bootLog: [],
+      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_AUTHKEY", bootLog: [], mode: "manual",
     });
     expect(nodes).toHaveLength(0);
   });
@@ -729,11 +729,13 @@ describe("live WebSocket (REQ-SEC-037)", () => {
     expect(store.alarmAt()).not.toBe(before);
   });
 
-  it("on alarm with no sockets connected, does not re-arm and does not start the node", async () => {
-    const store = makeCtx({ "ts-state-epoch": 1 });
+  it("on alarm with no sockets and no sample due, re-arms for the next sample and does not start the node (SPEC v19)", async () => {
+    const next = Date.now() + 3_600_000;
+    const store = makeCtx({ "ts-state-epoch": 1, "ts-health-next": next });
     const gw = gateway(ENV, store.ctx);
     await gw.alarm();
-    expect(store.alarmAt()).toBeNull();
+    expect(store.alarmAt()).toBe(next);
+    expect(store.stored.get("ts-health-samples")).toBeUndefined();
     expect(nodes).toHaveLength(0);
   });
 
@@ -746,6 +748,31 @@ describe("live WebSocket (REQ-SEC-037)", () => {
     expect(frames.length).toBeGreaterThan(0);
     expect(frames[0]).toMatchObject({ type: "node", node: "not-started" });
     expect(frames.every((f) => f.type === "node")).toBe(true);
+  });
+
+  it("coalesces repeated 'refresh' messages into one sweep per interval (REQ-SEC-052)", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx({ "ts-state-epoch": 1, "ts-health-next": Date.now() + 3_600_000 });
+    const gw = gateway(ENV, store.ctx);
+    onLogin = () => {};
+    onStart = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
+    const res = await gw.fetch(liveReq());
+    expect(res.status).toBe(101);
+    const sock = store.sockets[0];
+    await vi.advanceTimersByTimeAsync(0);
+    sock.sent.length = 0;
+    gw.webSocketMessage(sock as never, "refresh");
+    gw.webSocketMessage(sock as never, "refresh");
+    gw.webSocketMessage(sock as never, "refresh");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sock.sent).toHaveLength(1);
+    // After the interval, a refresh sweeps again.
+    await vi.advanceTimersByTimeAsync(10_000);
+    gw.webSocketMessage(sock as never, "refresh");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sock.sent).toHaveLength(2);
+    onStart = () => {};
+    onLogin = (node) => queueMicrotask(() => node.up());
   });
 });
 
@@ -891,5 +918,182 @@ describe("boot log (SPEC REQ-SEC-044/045)", () => {
     const st = await (await get(stGw, "/status")).json();
     expect(st.bootLog).toHaveLength(20);
     expect(st.bootLog[0].startedAt).toBe(seeded[5].startedAt);
+  });
+});
+
+describe("hourly samples, mode setting, auto-recovery, cooldown (SPEC v19: REQ-SEC-046..052)", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  type Rec = Record<string, unknown>;
+  const storedLog = (store: ReturnType<typeof makeCtx>) => (store.stored.get("ts-boot-log") ?? []) as Rec[];
+  const storedSamples = (store: ReturnType<typeof makeCtx>) => (store.stored.get("ts-health-samples") ?? []) as Rec[];
+  const STATE = { "_current-profile": "profile-1", "profile-1": "{}", "_machinekey": "mk" };
+  const postMode = (gw: MonitorGateway, mode: unknown) =>
+    gw.fetch(new Request("http://do/mode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) }));
+
+  /** Drive one persisted NeedsLogin stall through the real start path: the attempt times out after 60 s. */
+  const driveStall = async (gw: MonitorGateway) => {
+    onLogin = () => {}; // the deferred login changes nothing: the node stays in NeedsLogin
+    onStart = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+    onStart = () => {};
+    onLogin = (node) => queueMicrotask(() => node.up());
+  };
+
+  it("records an hourly sample (time, state, last outcome, ip) and re-arms for the next hour (REQ-SEC-046)", async () => {
+    const store = makeCtx({ "ts-state-epoch": 1, "ts-health-next": 0 });
+    const gw = gateway(ENV, store.ctx);
+    await gw.alarm();
+    const samples = storedSamples(store);
+    expect(samples).toHaveLength(1);
+    expect(samples[0]).toMatchObject({ state: "not-started", outcome: null, ip: null });
+    expect(typeof samples[0].at).toBe("string");
+    expect(store.alarmAt()).toBeGreaterThan(Date.now() + 3_500_000);
+    // The sample kicked a background start, as the read paths do; the state key is untouched.
+    await Promise.all(store.waits);
+    expect(nodes).toHaveLength(1);
+  });
+
+  it("caps the samples at 168, dropping the oldest (REQ-SEC-046)", async () => {
+    const seeded = Array.from({ length: 168 }, (_, i) => ({ at: `2026-11-01T${String(i % 24).padStart(2, "0")}:00:00.000Z`, state: "Running", outcome: "running", ip: "100.99.0.5", n: i }));
+    const store = makeCtx({ "ts-state-epoch": 1, "ts-health-next": 0, "ts-health-samples": seeded });
+    const gw = gateway(ENV, store.ctx);
+    await gw.alarm();
+    const samples = storedSamples(store);
+    expect(samples).toHaveLength(168);
+    expect(samples[0].n).toBe(1);
+    expect(samples.at(-1)!.n).toBeUndefined();
+  });
+
+  it("mode defaults to manual, changes via POST /mode, and shows on /status and /public-history (REQ-SEC-047)", async () => {
+    const store = makeCtx({ "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    expect((await (await get(gw, "/status")).json()).mode).toBe("manual");
+    expect((await postMode(gw, "bogus")).status).toBe(400);
+    expect((await gw.fetch(new Request("http://do/mode"))).status).toBe(404);
+    const res = await postMode(gw, "auto");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ mode: "auto" });
+    expect(store.stored.get("ts-mode")).toBe("auto");
+    expect((await (await get(gw, "/status")).json()).mode).toBe("auto");
+    const hist = await (await get(gw, "/public-history")).json();
+    expect(hist.mode).toBe("auto");
+  });
+
+  it("a corrupt stored mode falls back to manual (REQ-SEC-047)", async () => {
+    const gw = gateway(ENV, makeCtx({ "ts-state-epoch": 1, "ts-mode": "garbage" }).ctx);
+    expect((await (await get(gw, "/status")).json()).mode).toBe("manual");
+  });
+
+  it("/public-history is read-only: samples, boot log and mode, no node start, no secrets (REQ-SEC-049/051)", async () => {
+    const store = makeCtx({ "ts-state-epoch": 1 });
+    const gw = gateway(ENV, store.ctx);
+    const res = await get(gw, "/public-history");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ samples: [], bootLog: [], mode: "manual" });
+    expect(nodes).toHaveLength(0);
+    expect(store.waits).toHaveLength(0);
+    expect(JSON.stringify(body)).not.toContain("login.tailscale.com");
+  });
+
+  it("keyless reads do not restart a node whose last attempt just failed (cooldown, REQ-SEC-050)", async () => {
+    const now = new Date().toISOString();
+    const failed = { kind: "start", startedAt: now, endedAt: now, origin: "fresh", login: "immediate", transitions: [], browseUrlOffered: false, outcome: "timeout", detail: null, reason: null };
+    const store = makeCtx({ "ts-state-epoch": 1, "ts-boot-log": [failed] });
+    const gw = gateway(ENV, store.ctx);
+    const body = await (await get(gw, "/public-status")).json();
+    expect(body.node).toBe("not-started");
+    expect(store.waits).toHaveLength(0);
+    expect(nodes).toHaveLength(0);
+  });
+
+  it("after the cooldown, a keyless read starts the node again (REQ-SEC-050)", async () => {
+    const tenMinAgo = new Date(Date.now() - 600_000).toISOString();
+    const failed = { kind: "start", startedAt: tenMinAgo, endedAt: tenMinAgo, origin: "fresh", login: "immediate", transitions: [], browseUrlOffered: false, outcome: "timeout", detail: null, reason: null };
+    const store = makeCtx({ "ts-state-epoch": 1, "ts-boot-log": [failed] });
+    const gw = gateway(ENV, store.ctx);
+    await get(gw, "/public-status");
+    await flush();
+    expect(nodes).toHaveLength(1);
+  });
+
+  it("auto mode: a persisted NeedsLogin stall is discarded once and the rejoin is recorded (REQ-SEC-048)", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx({ "ts-state": STATE, "ts-state-epoch": 1, "ts-health-next": 0 });
+    const gw = gateway(ENV, store.ctx);
+    await driveStall(gw);
+    expect(storedLog(store).at(-1)).toMatchObject({ kind: "start", origin: "persisted", outcome: "timeout", browseUrlOffered: false });
+    await postMode(gw, "auto");
+    await gw.alarm();
+    await Promise.all(store.waits);
+    const log = storedLog(store);
+    const auto = log.find((r) => r.kind === "auto_recovery");
+    expect(auto).toMatchObject({ decision: "attempted" });
+    expect(typeof auto!.fingerprint).toBe("string");
+    expect(log.some((r) => r.kind === "state_discarded" && r.reason === "auto-recovery")).toBe(true);
+    expect(log.at(-1)).toMatchObject({ kind: "start", origin: "fresh", outcome: "running" });
+    expect(store.stored.get("ts-state")).toBeUndefined();
+  });
+
+  it("auto mode: the same fingerprint is never discarded twice; the skip is recorded once (REQ-SEC-048)", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx({ "ts-state": STATE, "ts-state-epoch": 1, "ts-health-next": 0 });
+    const gw = gateway(ENV, store.ctx);
+    await driveStall(gw);
+    await postMode(gw, "auto");
+    await gw.alarm();
+    await Promise.all(store.waits);
+
+    // The same state content comes back and stalls again (fresh DO instance, same storage).
+    store.stored.set("ts-state", { ...STATE });
+    const gw2 = gateway(ENV, store.ctx);
+    await driveStall(gw2);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    await gw2.alarm();
+    await Promise.all(store.waits);
+    expect(store.stored.get("ts-state")).toEqual(STATE);
+    expect(storedLog(store).filter((r) => r.kind === "auto_recovery" && r.decision === "already-attempted")).toHaveLength(1);
+    expect(storedLog(store).filter((r) => r.kind === "state_discarded" && r.reason === "auto-recovery")).toHaveLength(1);
+
+    // A third stall with the same fingerprint adds no further auto_recovery records.
+    const gw3 = gateway(ENV, store.ctx);
+    await driveStall(gw3);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    await gw3.alarm();
+    await Promise.all(store.waits);
+    expect(storedLog(store).filter((r) => r.kind === "auto_recovery")).toHaveLength(2);
+    expect(store.stored.get("ts-state")).toEqual(STATE);
+  });
+
+  it("manual mode: the same stall is left alone (REQ-SEC-048)", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx({ "ts-state": STATE, "ts-state-epoch": 1, "ts-health-next": 0 });
+    const gw = gateway(ENV, store.ctx);
+    await driveStall(gw);
+    await gw.alarm();
+    await Promise.all(store.waits);
+    expect(store.stored.get("ts-state")).toEqual(STATE);
+    expect(storedLog(store).some((r) => r.kind === "auto_recovery")).toBe(false);
+    expect(storedLog(store).some((r) => r.kind === "state_discarded")).toBe(false);
+  });
+
+  it("auto mode: a stall that offered a login URL is never auto-discarded (REQ-SEC-048)", async () => {
+    vi.useFakeTimers();
+    const store = makeCtx({ "ts-state": STATE, "ts-state-epoch": 1, "ts-health-next": 0 });
+    const gw = gateway(ENV, store.ctx);
+    onLogin = () => {};
+    onStart = (node) => queueMicrotask(() => { node.callbacks!.notifyState("NeedsLogin"); node.callbacks!.notifyBrowseToURL("https://login.tailscale.com/a/xyz"); });
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+    onStart = () => {};
+    expect(storedLog(store).at(-1)).toMatchObject({ outcome: "timeout", browseUrlOffered: true });
+    await postMode(gw, "auto");
+    await gw.alarm();
+    await Promise.all(store.waits);
+    expect(store.stored.get("ts-state")).toEqual(STATE);
+    expect(storedLog(store).some((r) => r.kind === "auto_recovery")).toBe(false);
   });
 });

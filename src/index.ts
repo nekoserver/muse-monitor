@@ -42,9 +42,25 @@ interface Env {
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 23: 未認証時のグレーアウトに彩度落としを追加(REQ-SEC-041)。ログイン待ちの間、認証済み表示に Tailscale ログインへのリンクを出す(REQ-SEC-042)。
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
+ * 26: 1時間ごとのヘルスサンプルとページ最上部のチャート、モード設定(手動/自動、DO が正・Cookie は写し)と
+ *     指紋ごとに1回限りの自動復旧、鍵なし経路の起動クールダウンと refresh 集約(REQ-SEC-046〜052、SPEC 版19)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 25;
+const MONITOR_REVISION = 26;
+
+/**
+ * Mode mirror cookie (REQ-SEC-047): after a mode change the Worker mirrors
+ * the DO's value into this cookie so the dashboard can pre-select it. It
+ * holds no secret (just "manual" or "auto"), so it is readable by the
+ * page's script; the DO stays authoritative and the page corrects itself
+ * from the chart data whenever the two disagree.
+ */
+export const MODE_COOKIE = "mm_mode";
+const MODE_COOKIE_MAX_AGE_S = 365 * 24 * 60 * 60;
+
+function modeCookie(mode: "manual" | "auto"): string {
+  return `${MODE_COOKIE}=${mode}; Path=/; Secure; SameSite=Strict; Max-Age=${MODE_COOKIE_MAX_AGE_S}`;
+}
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -159,6 +175,15 @@ const DASHBOARD = `<!DOCTYPE html>
   .main { flex: 1; min-width: 0; }
 </style></head><body>
 <h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
+<div id="chartbox">
+<p class="meta">ノードの状態（1時間ごと・直近7日） <span id="chartmsg"></span></p>
+<div id="healthchart" style="display:flex;gap:2px;flex-wrap:wrap"></div>
+<p id="chartdetail" class="meta" style="white-space:pre-wrap">点を選ぶと、その時間帯のサンプルと起動記録（検知・自動復旧を含む）が出ます</p>
+<p><label>自動復旧: <select id="modesel" onchange="changeMode()">
+<option value="manual">手動（停止していても自動復旧させない）</option>
+<option value="auto">自動（停止を検知したら自動復旧を試みる）</option>
+</select></label> <span class="meta" id="modemsg"></span></p>
+</div>
 <p id="loginstat" class="login-ng">ノードのログイン状態: 未ログイン（未取得）</p>
 <p id="bootlog" class="meta">直近の起動: 未取得</p>
 <p><a id="loginlink" href="#" target="_blank" rel="noopener" style="display:none">Tailscale ログインを承認する</a></p>
@@ -306,9 +331,68 @@ const DASHBOARD = `<!DOCTYPE html>
       el.textContent = 'ノードのログイン状態: 未ログイン（取得失敗）';
     }
   }
+  // 時間ごとチャート(REQ-SEC-049)。データは鍵なしの /health-history から取る。
+  // 各点からは、その時間帯のサンプルと起動記録(異常の検知時刻と自動復旧の
+  // 記録を含む)を呼び出して下に表示する。
+  let historyData = { samples: [], bootLog: [], mode: 'manual' };
+  function modeFromCookie() {
+    const m = document.cookie.match(/(?:^|; )mm_mode=(manual|auto)/);
+    return m ? m[1] : null;
+  }
+  async function loadHistory() {
+    try {
+      const r = await fetch('/health-history');
+      const j = await r.json();
+      historyData = j;
+      renderChart();
+      // モードの正は DO 側(REQ-SEC-047)。Cookie の初期表示と食い違えば
+      // DO 側に合わせる。
+      if (j.mode) document.getElementById('modesel').value = j.mode;
+    } catch (err) {
+      document.getElementById('chartmsg').textContent = '履歴の取得失敗: ' + err;
+    }
+  }
+  function renderChart() {
+    const box = document.getElementById('healthchart');
+    box.innerHTML = '';
+    const samples = historyData.samples || [];
+    if (!samples.length) { box.textContent = '記録なし'; return; }
+    for (const s of samples) {
+      const d = document.createElement('div');
+      d.style.cssText = 'width:10px;height:18px;cursor:pointer;border:1px solid #333;background:' +
+        (s.state === 'Running' ? '#2ea043' : s.state === 'not-started' ? '#555' : '#d73a49');
+      d.title = s.at + ' / ' + s.state;
+      d.onclick = () => showHour(s.at);
+      box.appendChild(d);
+    }
+  }
+  function showHour(at) {
+    const el = document.getElementById('chartdetail');
+    const hour = (at || '').slice(0, 13);
+    const samples = (historyData.samples || []).filter(s => (s.at || '').slice(0, 13) === hour);
+    const records = (historyData.bootLog || []).filter(r => (r.startedAt || '').slice(0, 13) === hour);
+    const lines = samples.map(s => 'サンプル ' + s.at + ' / 状態: ' + s.state + ' / 直近の試行: ' + (s.outcome ?? '進行中') + ' / IP: ' + (s.ip ?? '未割当'));
+    for (const r of records) {
+      if (r.kind === 'auto_recovery') lines.push('自動復旧 ' + r.startedAt + ' / 判断: ' + (r.decision ?? '-') + ' / ' + (r.detail ?? ''));
+      else if (r.kind === 'state_discarded') lines.push('状態破棄 ' + r.startedAt + ' / 理由: ' + (r.reason ?? '-') + ' / ' + (r.detail ?? ''));
+      else lines.push('起動 ' + r.startedAt + ' / ' + (r.origin === 'fresh' ? '新規' : '状態から復帰') + ' / ' + (r.outcome ?? '進行中'));
+    }
+    el.textContent = lines.length ? lines.join(String.fromCharCode(10)) : 'この時間帯の記録はありません';
+  }
+  async function changeMode() {
+    const sel = document.getElementById('modesel');
+    const msg = document.getElementById('modemsg');
+    try {
+      const r = await fetch('/api/mode', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers() }, body: JSON.stringify({ mode: sel.value }) });
+      if (r.status === 200) { msg.textContent = '保存しました'; loadHistory(); }
+      else if (r.status === 401) { msg.textContent = 'キー認証が必要です'; loadHistory(); }
+      else { msg.textContent = '保存失敗: ' + r.status; loadHistory(); }
+    } catch (err) { msg.textContent = '保存失敗: ' + err; }
+  }
   function loadAll() { loadLoginState(); loadStatus(); for (const [name] of SECTIONS) load(name); }
   // ログイン状態と IP は30秒ごとに取り直し、修復による変化を画面に映す(REQ-SEC-043)。
   setInterval(loadLoginState, 30000);
+  setInterval(loadHistory, 30000);
   function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
   function card(name) {
     return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
@@ -346,6 +430,10 @@ const DASHBOARD = `<!DOCTYPE html>
   }
   function setView(v) { view = v; render(); }
   render();
+  // モードの初期表示は Cookie の写しから取り、loadHistory が DO の正で合わせ直す(REQ-SEC-047)。
+  const initialMode = modeFromCookie();
+  if (initialMode) document.getElementById('modesel').value = initialMode;
+  loadHistory();
   loadLoginState();
   probeLogin();
   loadStatus();  // 7日間の Cookie が残っていれば、キーを入れずに状態が出る
@@ -441,10 +529,47 @@ export default {
       });
     }
 
+    if (url.pathname === "/health-history" && request.method === "GET") {
+      // チャート用データ(REQ-SEC-049)。鍵なし・読み取り専用で、DO 側も
+      // 起動や取得を引き起こさない(REQ-SEC-051)。
+      try {
+        const stub = env.MONITOR_GATEWAY.get(env.MONITOR_GATEWAY.idFromName("monitor-gateway"));
+        return await stub.fetch("http://do/public-history");
+      } catch (err) {
+        return Response.json({ error: `history unavailable: ${String(err).slice(0, 200)}` }, { status: 502 });
+      }
+    }
+
     if (url.pathname === "/" && request.method === "GET") {
       return new Response(DASHBOARD, {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
+    }
+
+    if (url.pathname === "/api/mode" && request.method === "POST") {
+      // モード設定の変更(REQ-SEC-047)。認証済みだけが変えられ、正は DO に置く。
+      const byKey = bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY);
+      if (!byKey && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
+        audit("/api/mode", "none", "rejected");
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      const body = (await request.clone().json().catch(() => null)) as { mode?: unknown } | null;
+      if (body?.mode !== "manual" && body?.mode !== "auto") {
+        audit("/api/mode", byKey ? "bearer" : "cookie", "rejected");
+        return Response.json({ error: "invalid mode" }, { status: 400 });
+      }
+      audit("/api/mode", byKey ? "bearer" : "cookie", "accepted");
+      const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
+      const stub = env.MONITOR_GATEWAY.get(id);
+      const res = await stub.fetch("http://do/mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: body.mode }),
+      });
+      if (res.status !== 200) return res;
+      const out = new Response(res.body, res);
+      out.headers.append("Set-Cookie", modeCookie(body.mode));
+      return out;
     }
 
     if (url.pathname === "/api/logout" && request.method === "POST") {
