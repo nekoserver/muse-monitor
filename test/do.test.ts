@@ -341,8 +341,15 @@ describe("node start failures", () => {
     expect(body.message).toContain("https://login.tailscale.com/a/abc123");
     expect(body.message).not.toContain("expired-key");
     expect(nodes[0].login).toHaveBeenCalledWith("expired-key");
+    // REQ-SEC-055: once the attempt has closed, its URL is no longer shown.
+    // The /status read drives a fresh attempt (REQ-SEC-053/054); the URL it
+    // offers is the one shown while that attempt is open.
     const status = await (await get(gw, "/status")).json();
-    expect(status).toMatchObject({ loginUrl: "https://login.tailscale.com/a/abc123", authKeyConfigured: true, authKeySource: "TS_AUTHKEY" });
+    expect(status).toMatchObject({ loginUrl: null, authKeyConfigured: true, authKeySource: "TS_AUTHKEY" });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(nodes[0].login).toHaveBeenCalledTimes(2);
+    const status2 = await (await get(gw, "/status")).json();
+    expect(status2).toMatchObject({ loginUrl: "https://login.tailscale.com/a/abc123" });
   });
 
   it("uses TS_AUTHKEY as the auth key instead of asking for interactive login", async () => {
@@ -483,12 +490,15 @@ describe("GET /public-status (for /health, no secrets)", () => {
 });
 
 describe("GET /status", () => {
-  it("before any request: not-started, without starting the node", async () => {
+  it("before any request: not-started, and the read drives a background start (REQ-SEC-053)", async () => {
     const gw = gateway();
-    expect(await (await get(gw, "/status")).json()).toEqual({
-      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_AUTHKEY", bootLog: [],
+    expect(await (await get(gw, "/status")).json()).toMatchObject({
+      node: "not-started", lastStatus: "not-started", lastError: null, loginUrl: null, authKeyConfigured: true, authKeySource: "TS_AUTHKEY",
     });
-    expect(nodes).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(nodes).toHaveLength(1);
+    expect(await (await get(gw, "/status")).json()).toMatchObject({ node: "Running" });
+    expect(nodes).toHaveLength(1);
   });
 
   it("after start: state, receiver candidates and the node's status, with no secret in the body", async () => {
@@ -891,5 +901,109 @@ describe("boot log (SPEC REQ-SEC-044/045)", () => {
     const st = await (await get(stGw, "/status")).json();
     expect(st.bootLog).toHaveLength(20);
     expect(st.bootLog[0].startedAt).toBe(seeded[5].startedAt);
+  });
+});
+
+describe("node check on /status and /node-check (SPEC v20, REQ-SEC-053..056)", () => {
+  const FIRST_URL = "https://login.tailscale.com/a/first";
+  /** A node whose login is never approved: NeedsLogin with a browse URL, then the attempt times out. */
+  async function wedged() {
+    vi.useFakeTimers();
+    onLogin = (node) => queueMicrotask(() => {
+      node.callbacks!.notifyState("NeedsLogin");
+      node.callbacks!.notifyBrowseToURL(FIRST_URL);
+    });
+    const gw = gateway();
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect((await pending).status).toBe(502);
+    expect(nodes[0].login).toHaveBeenCalledTimes(1);
+    return gw;
+  }
+  const startRecords = async (gw: MonitorGateway) =>
+    ((await (await get(gw, "/status")).json()).bootLog as Array<Record<string, unknown>>).filter((r) => r.kind === "start");
+
+  it("re-drives on /status after a timed-out attempt: login is called again on the same node and a new record opens", async () => {
+    const gw = await wedged();
+    const st = await (await get(gw, "/status")).json();
+    expect(st.loginUrl).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].login).toHaveBeenCalledTimes(2);
+    expect(nodes[0].login).toHaveBeenLastCalledWith("tskey-auth-secret");
+    const records = await startRecords(gw);
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({ origin: "fresh", login: "immediate", outcome: "timeout" });
+    expect(records[1]).toMatchObject({ origin: "persisted", login: "deferred", outcome: null });
+  });
+
+  it("does not stack while an attempt is open: repeated /status reads add neither a login call nor a record", async () => {
+    const gw = await wedged();
+    await get(gw, "/status");
+    await vi.advanceTimersByTimeAsync(1);
+    await get(gw, "/status");
+    await get(gw, "/status");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(nodes[0].login).toHaveBeenCalledTimes(2);
+    expect(await startRecords(gw)).toHaveLength(2);
+  });
+
+  it("keeps driving on later reads: when the re-drive also times out, the next /status opens another attempt", async () => {
+    const gw = await wedged();
+    await get(gw, "/status");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await get(gw, "/status");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(nodes[0].login).toHaveBeenCalledTimes(3);
+    const records = await startRecords(gw);
+    expect(records).toHaveLength(3);
+    expect(records[1]).toMatchObject({ outcome: "timeout" });
+    expect(records[2]).toMatchObject({ outcome: null });
+  });
+
+  it("shows the URL only while its attempt is open, and does not adopt a URL offered with no attempt open (REQ-SEC-055)", async () => {
+    vi.useFakeTimers();
+    onLogin = (node) => queueMicrotask(() => {
+      node.callbacks!.notifyState("NeedsLogin");
+      node.callbacks!.notifyBrowseToURL(FIRST_URL);
+    });
+    const gw = gateway();
+    const pending = get(gw, "/monitor/jobs");
+    await vi.advanceTimersByTimeAsync(1);
+    // The first attempt is open and has offered its URL: it is shown.
+    expect((await (await get(gw, "/status")).json()).loginUrl).toBe(FIRST_URL);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await pending;
+    // A URL arriving after the attempt closed must not be adopted.
+    onLogin = () => {};
+    nodes[0].callbacks!.notifyBrowseToURL("https://login.tailscale.com/a/late");
+    const st = await (await get(gw, "/status")).json();
+    expect(st.loginUrl).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await (await get(gw, "/status")).json()).loginUrl).toBeNull();
+  });
+
+  it("POST /node-check drives the check before answering, and returns the current state", async () => {
+    const gw = await wedged();
+    const res = await gw.fetch(new Request("http://do/node-check", { method: "POST" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.node).toBe("NeedsLogin");
+    expect(nodes[0].login).toHaveBeenCalledTimes(2);
+    const records = (body.bootLog as Array<Record<string, unknown>>).filter((r) => r.kind === "start");
+    expect(records).toHaveLength(2);
+    expect(records[1]).toMatchObject({ origin: "persisted", login: "deferred", outcome: null });
+  });
+
+  it("drives nothing while the node is Running", async () => {
+    const gw = gateway();
+    await get(gw, "/monitor/jobs");
+    expect(nodes[0].login).toHaveBeenCalledTimes(1);
+    await get(gw, "/status");
+    const res = await gw.fetch(new Request("http://do/node-check", { method: "POST" }));
+    expect(res.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(nodes[0].login).toHaveBeenCalledTimes(1);
+    expect(await startRecords(gw)).toHaveLength(1);
   });
 });

@@ -56,6 +56,7 @@ Durable Object (MonitorGateway)
 | `GET /api/status`       | WORKER_API_KEY かログイン Cookie | WASM ノードの状態。キーで呼ぶとログイン Cookie(7日)を発行 |
 | `GET /api/monitor/<s>`  | WORKER_API_KEY かログイン Cookie | section のデータを返す  |
 | `POST /api/logout`      | なし | ログイン Cookie を消す |
+| `POST /api/node-check`  | WORKER_API_KEY かログイン Cookie | ノード確認の手動駆動（REQ-SEC-056）。ダッシュボードの「ノード再確認」ボタンが呼ぶ |
 | `GET /api/hmac/monitor/<s>` | HMAC 署名  | 本体 Worker 専用。署名が無い・不正・時刻が ±300 秒を超えるものは全て拒否する |
 | `GET /api/hmac/status`  | HMAC 署名      | 本体 Worker 専用。ノード状態（署名対象は `status`） |
 

@@ -279,6 +279,60 @@ export class MonitorGateway extends DurableObject<Env> {
     });
   }
 
+  private attemptOpen(): boolean {
+    return this.bootAttempt !== null && this.bootAttempt.record.outcome === null;
+  }
+
+  /**
+   * The page-load / manual-button node check (REQ-SEC-053/054): if the node
+   * is not Running and no boot attempt is open, drive a new one. A node that
+   * was never created goes through the normal start; a created node whose
+   * last attempt closed without Running is re-driven with a fresh login()
+   * on the SAME node — its persisted state is not discarded (discarding
+   * stays with the recovery paths, REQ-SEC-026..028/036/048). Callers never
+   * wait for the attempt: the wait runs under waitUntil (via settleAttempt),
+   * except that /node-check awaits this initiation itself so the drive is
+   * never deferred past its response.
+   */
+  private async initiateCheck(): Promise<void> {
+    if (this.lastStatus === "Running" || this.attemptOpen()) return;
+    if (!this.ipn) {
+      await this.ensureNode().catch((err) => {
+        this.lastError = `node start failed: ${String(err).slice(0, 200)}`;
+      });
+      return;
+    }
+    const record: BootRecord = {
+      kind: "start",
+      startedAt: new Date().toISOString(),
+      origin: "persisted",
+      login: "deferred",
+      transitions: [],
+      browseUrlOffered: false,
+      outcome: null,
+      detail: null,
+      reason: null,
+    };
+    this.bootAttempt = { record, startedMs: Date.now(), gen: this.nodeGeneration };
+    this.browseUrl = null;
+    await this.appendBoot(record);
+    try {
+      this.ipn.login(this.authKey()?.value);
+    } catch (err) {
+      this.closeBootAttempt(err);
+      return;
+    }
+    this.ctx.waitUntil(this.settleAttempt());
+  }
+
+  /** Close the re-driven attempt when its wait ends without Running. */
+  private async settleAttempt(): Promise<void> {
+    await this.waitForRunning().then(
+      () => {},
+      (err) => { this.closeBootAttempt(err); },
+    );
+  }
+
   /** Close the in-flight attempt record (once) from a wait failure: the 60 s timer is a timeout, anything else an error. */
   private closeBootAttempt(err: unknown): void {
     const attempt = this.bootAttempt;
@@ -478,6 +532,10 @@ export class MonitorGateway extends DurableObject<Env> {
       },
       notifyBrowseToURL: (url: string) => {
         if (gen !== this.nodeGeneration) return;
+        // REQ-SEC-055: a URL counts only while the attempt that produced it
+        // is open. One arriving after the attempt closed (or with none open)
+        // belongs to a dead session and is not adopted.
+        if (!this.attemptOpen()) return;
         this.browseUrl = url;
         // REQ-SEC-044: record only that a URL was offered, never the URL.
         const attempt = this.bootAttempt;
@@ -503,6 +561,14 @@ export class MonitorGateway extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/status") return this.status();
+    if (url.pathname === "/node-check") {
+      if (request.method !== "POST") return Response.json({ error: "not found" }, { status: 404 });
+      // REQ-SEC-056: the manual check drives first, then answers with the
+      // current state (status() would drive again, but the attempt is open
+      // by then, so it is a no-op).
+      await this.initiateCheck();
+      return this.status();
+    }
     if (url.pathname === "/public-status") return this.publicStatus();
     if (url.pathname === "/live") return this.live(request);
     if (url.pathname === "/hmac-claim") {
@@ -838,12 +904,24 @@ export class MonitorGateway extends DurableObject<Env> {
   }
 
   async status(): Promise<Response> {
+    const res = await this.statusResponse();
+    // REQ-SEC-053: every authenticated status read runs the node check. The
+    // response reports the state as of the read; the drive is a background
+    // side effect for the next read (or for the approval that follows).
+    this.ctx.waitUntil(this.initiateCheck());
+    return res;
+  }
+
+  private async statusResponse(): Promise<Response> {
+    // REQ-SEC-055: the login URL is shown only while the attempt that
+    // produced it is open; a closed attempt's URL is never offered again.
+    const loginUrl = this.attemptOpen() ? this.browseUrl : null;
     if (!this.ipn) {
       return Response.json({
         node: "not-started",
         lastStatus: this.lastStatus,
         lastError: this.lastError,
-        loginUrl: this.browseUrl,
+        loginUrl,
         authKeyConfigured: Boolean(this.authKey()),
         authKeySource: this.authKeySource(),
         bootLog: (await this.loadBootLog()).slice(-20),
@@ -861,7 +939,7 @@ export class MonitorGateway extends DurableObject<Env> {
     return Response.json({
       node: this.lastStatus,
       lastError: this.lastError,
-      loginUrl: this.browseUrl,
+      loginUrl,
       authKeyConfigured: Boolean(this.authKey()),
         authKeySource: this.authKeySource(),
       bootLog: (await this.loadBootLog()).slice(-20),
