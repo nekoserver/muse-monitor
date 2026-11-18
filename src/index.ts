@@ -44,7 +44,7 @@ interface Env {
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 25;
+const MONITOR_REVISION = 26;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -161,7 +161,8 @@ const DASHBOARD = `<!DOCTYPE html>
 <h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
 <p id="loginstat" class="login-ng">ノードのログイン状態: 未ログイン（未取得）</p>
 <p id="bootlog" class="meta">直近の起動: 未取得</p>
-<p><a id="loginlink" href="#" target="_blank" rel="noopener" style="display:none">Tailscale ログインを承認する</a></p>
+<p><a id="loginlink" href="#" target="_blank" rel="noopener" style="display:none">Tailscale ログインを承認する</a>
+<button type="button" id="nodecheck" onclick="nodeCheck()">ノード再確認</button></p>
 <p id="authstat" class="login-ng">このブラウザのキー認証: 未認証</p>
 <p class="meta">実行系はここにはありません。依頼の受付はホスト側ダッシュボード、
 承認はホストのシェルでのみ行えます。</p>
@@ -246,6 +247,12 @@ const DASHBOARD = `<!DOCTYPE html>
       data[name] = j.output !== undefined ? j.output : JSON.stringify(j, null, 2);
     } catch (err) { data[name] = '取得失敗: ' + err; }
     render();
+  }
+  // 手動の再確認ボタン(REQ-SEC-056): DO 側のノード確認を即時に駆動してから、状態表示を読み直す。
+  async function nodeCheck() {
+    try { await fetch('/api/node-check', { method: 'POST', headers: headers() }); } catch {}
+    loadStatus();
+    loadLoginState();
   }
   async function loadStatus() {
     const el = document.getElementById('nodestat');
@@ -466,6 +473,18 @@ export default {
       const out = new Response(res.body, res);
       out.headers.append("Set-Cookie", await makeAuthCookie(env.WORKER_API_KEY, nowS()));
       return out;
+    }
+
+    if (url.pathname === "/api/node-check" && request.method === "POST") {
+      const byKey = bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY);
+      if (!byKey && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
+        audit("/api/node-check", "none", "rejected");
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      audit("/api/node-check", byKey ? "bearer" : "cookie", "accepted");
+      const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
+      const stub = env.MONITOR_GATEWAY.get(id);
+      return stub.fetch("http://do/node-check", { method: "POST" });
     }
 
     if (url.pathname === "/api/hmac/status" && request.method === "GET") {

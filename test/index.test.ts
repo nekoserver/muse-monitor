@@ -51,7 +51,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 25,
+      status: "ok", worker: "muse-monitor", revision: 26,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +64,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 25, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 26, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -494,5 +494,39 @@ describe("dashboard script", () => {
     expect(html).toContain('id="bootlog"');
     expect(html).toContain("直近の起動");
     expect(html).toMatch(/function loadLoginState\(\) \{[\s\S]*?bootLog/);
+  });
+});
+
+describe("POST /api/node-check (REQ-SEC-056)", () => {
+  it("rejects unauthenticated calls with 401 and never reaches the DO", async () => {
+    const { env, calls } = makeEnv();
+    for (const headers of [{}, { Authorization: "Bearer wrong" }, { Authorization: `Bearer ${MONITOR_HMAC_SECRET}` }]) {
+      const res = await worker.fetch(call("/api/node-check", headers, "POST"), env);
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: "unauthorized" });
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("forwards an authenticated call to the DO's /node-check", async () => {
+    const { env, calls } = makeEnv();
+    const res = await worker.fetch(call("/api/node-check", { Authorization: `Bearer ${WORKER_API_KEY}` }, "POST"), env);
+    expect(res.status).toBe(200);
+    expect(calls).toEqual(["http://do/node-check"]);
+  });
+
+  it("is POST-only: a GET is not the check route", async () => {
+    const { env, calls } = makeEnv();
+    const res = await worker.fetch(call("/api/node-check", { Authorization: `Bearer ${WORKER_API_KEY}` }), env);
+    expect(res.status).toBe(404);
+    expect(calls).toEqual([]);
+  });
+
+  it("the dashboard has a manual node-check button that calls /api/node-check", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    expect(html).toContain('id="nodecheck"');
+    expect(html).toContain("ノード再確認");
+    expect(html).toMatch(/function nodeCheck\(\) \{[\s\S]*?fetch\('\/api\/node-check', \{ method: 'POST'/);
   });
 });
