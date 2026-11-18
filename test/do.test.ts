@@ -49,7 +49,7 @@ class FakeNode {
 
 let nodes: FakeNode[];
 let goRuns: number;
-let onLogin: (node: FakeNode) => void;
+let onLogin: (node: FakeNode, authKey?: string) => void;
 let onStart: (node: FakeNode) => void;
 let newIpnResult: ((config: IPNConfig) => unknown) | null;
 
@@ -64,7 +64,7 @@ beforeEach(() => {
   (globalThis as Record<string, unknown>).newIPN = (config: IPNConfig) => {
     if (newIpnResult) return newIpnResult(config);
     const node = new FakeNode(config);
-    node.login.mockImplementation(() => onLogin(node));
+    node.login.mockImplementation((authKey?: string) => onLogin(node, authKey));
     const run = node.run.bind(node);
     node.run = (callbacks) => { run(callbacks); onStart(node); };
     nodes.push(node);
@@ -982,6 +982,49 @@ describe("node check on /status and /node-check (SPEC v20, REQ-SEC-053..056)", (
     await vi.advanceTimersByTimeAsync(1);
     expect((await (await get(gw, "/status")).json()).loginUrl).toBeNull();
   });
+
+  // 2026-11-18 本番: TS_AUTHKEY を付けた login() は NeedsLogin のまま URL を出さず、毎回60秒で時間切れになった
+  // (/health の bootLog で browseUrlOffered: false が続いた)。鍵が受け付けられないと、鍵付きの再駆動では
+  // 何度押してもログインのリンクが出ない。鍵を付けた前の試行が URL も Running も無く閉じたなら、
+  // 再確認では鍵を付けずに login() を呼び、対話のログイン URL を出させる。
+  describe("when the auth key is not accepted (NeedsLogin, no URL)", () => {
+    const KEYLESS_URL = "https://login.tailscale.com/a/keyless";
+    async function keyRejected() {
+      vi.useFakeTimers();
+      onLogin = (node, authKey) => queueMicrotask(() => {
+        node.callbacks!.notifyState("NeedsLogin");
+        if (!authKey) node.callbacks!.notifyBrowseToURL(KEYLESS_URL);
+      });
+      const gw = gateway();
+      const pending = get(gw, "/monitor/jobs");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect((await pending).status).toBe(502);
+      return gw;
+    }
+
+    it("POST /node-check re-drives WITHOUT the key, so a login URL is offered and shown", async () => {
+      const gw = await keyRejected();
+      expect(nodes[0].login).toHaveBeenLastCalledWith("tskey-auth-secret");
+      const res = await gw.fetch(new Request("http://do/node-check", { method: "POST" }));
+      expect(res.status).toBe(200);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nodes[0].login).toHaveBeenCalledTimes(2);
+      expect(nodes[0].login.mock.calls[1][0]).toBeUndefined();
+      const st = await (await get(gw, "/status")).json();
+      expect(st.loginUrl).toBe(KEYLESS_URL);
+      const records = (st.bootLog as Array<Record<string, unknown>>).filter((r) => r.kind === "start");
+      expect(records.at(-1)).toMatchObject({ origin: "persisted", browseUrlOffered: true, outcome: null });
+    });
+
+    it("keeps using the key while the previous attempt did offer a URL (the key path is not dropped needlessly)", async () => {
+      const gw = await wedgedWithUrl();
+      await gw.fetch(new Request("http://do/node-check", { method: "POST" }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nodes[0].login).toHaveBeenLastCalledWith("tskey-auth-secret");
+    });
+  });
+
+  async function wedgedWithUrl() { return wedged(); }
 
   it("POST /node-check drives the check before answering, and returns the current state", async () => {
     const gw = await wedged();
