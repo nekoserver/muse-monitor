@@ -302,6 +302,11 @@ export class MonitorGateway extends DurableObject<Env> {
       });
       return;
     }
+    // 鍵を付けた前の試行が URL も Running も無く閉じた(鍵が受け付けられない)なら、鍵を付けずに login() を呼び、
+    // 対話のログイン URL を出させる(2026-11-18 本番で、鍵付きの再駆動が毎回 URL 無しで時間切れになった)。
+    const previous = (await this.loadBootLog()).filter((r) => r.kind === "start").at(-1);
+    const keyRejected = Boolean(this.authKey()) && previous !== undefined && previous.outcome !== null
+      && previous.outcome !== "running" && !previous.browseUrlOffered;
     const record: BootRecord = {
       kind: "start",
       startedAt: new Date().toISOString(),
@@ -317,7 +322,7 @@ export class MonitorGateway extends DurableObject<Env> {
     this.browseUrl = null;
     await this.appendBoot(record);
     try {
-      this.ipn.login(this.authKey()?.value);
+      this.ipn.login(keyRejected ? undefined : this.authKey()?.value);
     } catch (err) {
       this.closeBootAttempt(err);
       return;
