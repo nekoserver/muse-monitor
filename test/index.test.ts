@@ -52,7 +52,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 34,
+      status: "ok", worker: "muse-monitor", revision: 35,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -65,7 +65,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 34, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 35, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -212,7 +212,58 @@ describe("login cookie: keeps the authenticated state for 7 days, never the key"
     expect(html).toContain('id="authbtn"');
     expect(html).toContain("/api/logout");
     expect(html).toMatch(/function headers\(\) \{[^}]*key\(\) \?/);
-    expect(html).not.toMatch(/localStorage|sessionStorage|document\.cookie/);
+    expect(html).not.toMatch(/localStorage|sessionStorage/);
+  });
+});
+
+describe("dashboard layout", () => {
+  it("defaults to the side panel, saves only a supported layout and follows the current section", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]
+      .split("\n  render();\n  loadLoginState();")[0];
+    const tops = [10, 600];
+    const link = (name: string) => ({
+      dataset: { section: name }, setAttribute: vi.fn(), removeAttribute: vi.fn(),
+    });
+    const links = [link("status"), link("jobs")];
+    const writes: string[] = [];
+    function page(cookie: string) {
+      return runInNewContext(script + "\n({ getView: () => view, setView, updatePanelSection })", {
+        setInterval: () => {},
+        window: { addEventListener: () => {}, innerHeight: 400, scrollY: 0 },
+        document: {
+          get cookie() { return cookie; },
+          set cookie(value: string) { writes.push(value); },
+          addEventListener: () => {},
+          documentElement: { scrollHeight: 1200 },
+          getElementById: () => ({}),
+          querySelectorAll: (selector: string) => {
+            if (selector === "#view .side a[data-section]") return links;
+            if (selector === "#view .main > .card") return tops.map((top, i) => ({
+              id: i === 0 ? "sec-status" : "sec-jobs", getBoundingClientRect: () => ({ top }),
+            }));
+            return [];
+          },
+          createElement: () => ({ innerHTML: "" }),
+        },
+      });
+    }
+    const active = page("unrelated=1");
+    expect(active.getView()).toBe("panel");
+    expect(writes.at(-1)).toMatch(/^mm_view=panel;.*SameSite=Strict/);
+    active.updatePanelSection();
+    expect(links[0].setAttribute).toHaveBeenCalledWith("aria-current", "location");
+    tops.splice(0, 2, -550, 12);
+    active.updatePanelSection();
+    expect(links[0].removeAttribute).toHaveBeenCalledWith("aria-current");
+    expect(links[1].setAttribute).toHaveBeenCalledWith("aria-current", "location");
+    active.setView("tree");
+    expect(writes.at(-1)).toMatch(/^mm_view=tree;/);
+    expect(page(writes.at(-1)!.split(";")[0]).getView()).toBe("tree");
+    active.setView("invalid");
+    expect(active.getView()).toBe("tree");
+    expect(page("mm_view=invalid").getView()).toBe("panel");
   });
 });
 
@@ -508,7 +559,7 @@ describe("dashboard script", () => {
     const { env } = makeEnv();
     const html = await (await worker.fetch(call("/"), env)).text();
     const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]
-      .replace(/  render\(\);\n  loadLoginState\(\);\n  probeLogin\(\);\n  loadStatus\(\);[^\n]*$/, "");
+      .split("\n  render();\n  loadLoginState();")[0];
     const gated = { inert: true, classList: { toggle: vi.fn() } };
     const auth = { className: "", textContent: "" };
     const elements: Record<string, object> = { gated, authstat: auth };
@@ -523,7 +574,7 @@ describe("dashboard script", () => {
       return Response.json({ error: dataStatus === 502 ? "receiver_unauthorized" : "unauthorized" }, { status: dataStatus });
     });
     const page = runInNewContext(script + "\n({ loadLoginState, probeLogin, load, data })", {
-      fetch, setInterval: () => {},
+      fetch, setInterval: () => {}, window: {},
       document: {
         getElementById: (id: string) => elements[id] ??= { value: "" },
         querySelectorAll: () => [],

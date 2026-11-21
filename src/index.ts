@@ -44,7 +44,7 @@ interface Env {
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 34;
+const MONITOR_REVISION = 35;
 
 export { MonitorGateway } from "./do";
 import { AUTH_COOKIE_MAX_AGE_S, authCookieExpiry, authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -152,6 +152,8 @@ const DASHBOARD = `<!DOCTYPE html>
   .side h3 { margin: .6em 0 .2em; font-size: .9em; color: #9c9; }
   .side a { display: block; color: #ddd; text-decoration: none; padding: .15em 0; }
   .side a:hover { text-decoration: underline; }
+  .side a[aria-current="location"] { background: #ddd; color: #111; border-radius: 3px; }
+  .layout .main > .card { scroll-margin-top: 1rem; }
   .tree { min-width: 12em; border: 1px solid #333; border-radius: 6px; padding: .6em .8em; }
   .tree button { display: block; margin: .2em 0 .2em 1em; background: none; border: none; color: #ddd; }
   .tree button.sel { color: #9c9; font-weight: bold; }
@@ -190,7 +192,16 @@ const DASHBOARD = `<!DOCTYPE html>
   ];
   const TITLE = Object.fromEntries(SECTIONS);
   const data = {};   // name -> text
-  let view = "tabs", activeTab = CATS[0][0], treeSel = "status";
+  const VIEW_MODES = ["panel", "tabs", "tree"];
+  function saveView(mode) {
+    document.cookie = 'mm_view=' + mode + '; Path=/; Max-Age=31536000; SameSite=Strict'
+      + (window.location?.protocol === 'https:' ? '; Secure' : '');
+  }
+  const savedView = (document.cookie || '').split(';').map(part => part.trim())
+    .find(part => part.startsWith('mm_view='))?.slice('mm_view='.length);
+  let view = VIEW_MODES.includes(savedView) ? savedView : "panel";
+  if (view !== savedView) saveView(view);
+  let activeTab = CATS[0][0], treeSel = "status";
   function key() { return document.getElementById('key').value.trim(); }
   function headers() { return key() ? { Authorization: 'Bearer ' + key() } : {}; }
   let loggedIn = false;
@@ -253,7 +264,7 @@ const DASHBOARD = `<!DOCTYPE html>
   async function load(name) {
     if (!canReadData()) return;
     const epoch = dataEpoch;
-    data[name] = "取得中…"; render();
+    data[name] = "取得中…"; renderSectionData(name);
     try {
       const r = await fetch('/api/monitor/' + name, { headers: headers() });
       if (epoch !== dataEpoch) return;
@@ -265,7 +276,7 @@ const DASHBOARD = `<!DOCTYPE html>
       if (epoch !== dataEpoch) return;
       data[name] = '取得失敗: ' + err;
     }
-    render();
+    renderSectionData(name);
   }
   // 手動の再確認ボタン(REQ-SEC-056): DO 側のノード確認を即時に駆動してから、状態表示を読み直す。
   async function nodeCheck() {
@@ -351,8 +362,27 @@ const DASHBOARD = `<!DOCTYPE html>
   function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
   function card(name) {
     return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
-      ' <button type="button" onclick="load(\\'' + name + '\\')">再取得</button></h2><pre>' +
+      ' <button type="button" onclick="load(\\'' + name + '\\')">再取得</button></h2><pre id="data-' + name + '">' +
       esc(data[name] ?? '（未取得）') + '</pre></section>';
+  }
+  function renderSectionData(name) {
+    const output = document.getElementById('data-' + name);
+    if (output) output.textContent = data[name];
+    updatePanelSection();
+  }
+  function updatePanelSection() {
+    if (view !== "panel") return;
+    const cards = Array.from(document.querySelectorAll('#view .main > .card'));
+    if (!cards.length) return;
+    const atEnd = window.scrollY > 0
+      && window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 1;
+    const active = atEnd ? cards.at(-1)
+      : cards.findLast(card => card.getBoundingClientRect().top <= 24) ?? cards[0];
+    const name = active.id.slice('sec-'.length);
+    for (const link of document.querySelectorAll('#view .side a[data-section]')) {
+      if (link.dataset.section === name) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    }
   }
   function render() {
     for (const b of document.querySelectorAll('.viewbtn'))
@@ -377,17 +407,25 @@ const DASHBOARD = `<!DOCTYPE html>
       let side = '';
       for (const [c, names] of CATS) {
         side += '<h3>' + esc(c) + '</h3>' + names.map(n =>
-          '<a href="#sec-' + n + '">' + esc(TITLE[n]) + '</a>').join('');
+          '<a href="#sec-' + n + '" data-section="' + n + '">' + esc(TITLE[n]) + '</a>').join('');
       }
       root.innerHTML = '<div class="layout"><div class="side">' + side +
         '</div><div class="main">' + SECTIONS.map(([n]) => card(n)).join('') + '</div></div>';
+      updatePanelSection();
     }
   }
-  function setView(v) { view = v; render(); }
+  function setView(v) {
+    if (!VIEW_MODES.includes(v) || v === view) return;
+    view = v;
+    saveView(view);
+    render();
+  }
   render();
   loadLoginState();
   probeLogin();
   loadStatus();  // 7日間の Cookie が残っていれば、キーを入れずに状態が出る
+  window.addEventListener('scroll', updatePanelSection, { passive: true });
+  window.addEventListener('resize', updatePanelSection);
 </script>
 </body></html>`;
 
