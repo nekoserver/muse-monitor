@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 
@@ -51,7 +52,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 30,
+      status: "ok", worker: "muse-monitor", revision: 34,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -64,7 +65,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 30, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 34, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -141,6 +142,22 @@ describe("login cookie: keeps the authenticated state for 7 days, never the key"
       expect(res.headers.get("Set-Cookie"), path).toBeNull();
     }
     expect(calls).toEqual(["http://do/status", "http://do/status", "http://do/monitor/jobs"]);
+  });
+
+  it("withholds a result when its browser cookie expires during a direct data request", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-11T00:00:00Z"));
+    const { env } = makeEnv();
+    const cookie = cookieOf(await worker.fetch(call("/api/status", auth), env));
+    (env as { MONITOR_GATEWAY: { get: () => unknown } }).MONITOR_GATEWAY.get = () => ({
+      fetch: async () => {
+        vi.setSystemTime(new Date("2026-11-18T00:00:00Z"));
+        return Response.json({ output: "protected data" });
+      },
+    });
+    const response = await worker.fetch(call("/api/monitor/jobs", { Cookie: cookie }), env);
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "unauthorized" });
   });
 
   it("stops working after 7 days", async () => {
@@ -290,6 +307,32 @@ describe("GET /api/live (WebSocket, REQ-SEC-037)", () => {
     const res = await worker.fetch(call("/api/live", { Upgrade: "websocket" }), env);
     expect(res.status).toBe(401);
     expect(calls).toEqual([]);
+  });
+
+  it("uses the signed cookie deadline instead of a caller-supplied live deadline", async () => {
+    const { env } = makeEnv();
+    const fixture = env as { MONITOR_GATEWAY: { get: () => unknown } };
+    const login = await worker.fetch(call("/api/status", { Authorization: `Bearer ${WORKER_API_KEY}` }), env);
+    const cookie = login.headers.get("Set-Cookie")!.split(";")[0];
+    const deadline = cookie.split("=")[1].split(".")[0];
+    const forward = vi.fn(async (_url: string, _request: Request) => Response.json({}));
+    fixture.MONITOR_GATEWAY.get = () => ({ fetch: forward });
+    const response = await worker.fetch(call("/api/live", {
+      Cookie: cookie, Upgrade: "websocket", Origin: "https://muse-monitor.example", "X-Muse-Live-Expires": "999999999999",
+    }), env);
+    expect(response.status).toBe(200);
+    expect(forward.mock.calls[0][1].headers.get("X-Muse-Live-Expires")).toBe(deadline);
+  });
+
+  it("rejects an upgrade from another origin even with a valid browser cookie", async () => {
+    const { env, calls } = makeEnv();
+    const login = await worker.fetch(call("/api/status", { Authorization: `Bearer ${WORKER_API_KEY}` }), env);
+    const cookie = login.headers.get("Set-Cookie")!.split(";")[0];
+    const response = await worker.fetch(call("/api/live", {
+      Cookie: cookie, Upgrade: "websocket", Origin: "https://other.example",
+    }), env);
+    expect(response.status).toBe(401);
+    expect(calls).toEqual(["http://do/status"]);
   });
 
   it("rejects an authenticated request without the Upgrade header with 426", async () => {
@@ -458,9 +501,78 @@ describe("dashboard script", () => {
     expect(html).not.toContain("applyAuthToButtons");
     // One function toggles the section from the login state, driven by the setter.
     expect(html).toContain("function applyAuthGate()");
-    expect(html).toMatch(/classList\.toggle\('off', !loggedIn\)/);
-    expect(html).toMatch(/\.inert = !loggedIn/);
     expect(html).toMatch(/function setLoggedIn\(v\) \{[\s\S]*?applyAuthGate\(\)/);
+  });
+
+  it("unlocks data only after both logins and keeps a valid session on a receiver error", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]
+      .replace(/  render\(\);\n  loadLoginState\(\);\n  probeLogin\(\);\n  loadStatus\(\);[^\n]*$/, "");
+    const gated = { inert: true, classList: { toggle: vi.fn() } };
+    const auth = { className: "", textContent: "" };
+    const elements: Record<string, object> = { gated, authstat: auth };
+    let browserStatus = 401;
+    let node = "NeedsLogin";
+    let dataStatus = 200;
+    let pendingData: Promise<Response> | undefined;
+    const fetch = vi.fn(async (path: string) => {
+      if (path === "/health") return Response.json({ node: { node } });
+      if (path === "/api/status") return Response.json({}, { status: browserStatus });
+      if (pendingData) return pendingData;
+      return Response.json({ error: dataStatus === 502 ? "receiver_unauthorized" : "unauthorized" }, { status: dataStatus });
+    });
+    const page = runInNewContext(script + "\n({ loadLoginState, probeLogin, load, data })", {
+      fetch, setInterval: () => {},
+      document: {
+        getElementById: (id: string) => elements[id] ??= { value: "" },
+        querySelectorAll: () => [],
+        createElement: () => ({ innerHTML: "" }),
+      },
+    });
+
+    await page.load("status");
+    expect(fetch).not.toHaveBeenCalledWith("/api/monitor/status", expect.anything());
+    node = "Running";
+    await page.loadLoginState();
+    expect(gated.inert).toBe(true);
+    node = "NeedsLogin";
+    await page.loadLoginState();
+    browserStatus = 200;
+    await page.probeLogin();
+    expect(gated.inert).toBe(true);
+
+    node = "Running";
+    await page.loadLoginState();
+    expect(gated.inert).toBe(false);
+    const sectionCalls = () => fetch.mock.calls.filter(([path]) => path.startsWith("/api/monitor/"));
+    expect(sectionCalls().map(([path]) => path).sort()).toEqual(DO_SECTIONS.map(name => "/api/monitor/" + name).sort());
+    await page.loadLoginState();
+    expect(sectionCalls()).toHaveLength(DO_SECTIONS.length);
+    dataStatus = 502;
+    await page.load("status");
+    expect(gated.inert).toBe(false);
+    expect(auth.className).toBe("login-ok");
+
+    let resolveData!: (response: Response) => void;
+    pendingData = new Promise(resolve => { resolveData = resolve; });
+    const late = page.load("status");
+    node = "NeedsLogin";
+    await page.loadLoginState();
+    resolveData(Response.json({ output: "stale result" }));
+    await late;
+    pendingData = undefined;
+    expect(gated.inert).toBe(true);
+    expect(page.data).toEqual({});
+    expect(auth.className).toBe("login-ok");
+
+    node = "Running";
+    await page.loadLoginState();
+    expect(gated.inert).toBe(false);
+    dataStatus = 401;
+    await page.load("status");
+    expect(gated.inert).toBe(true);
+    expect(auth.className).toBe("login-ng");
   });
 
   it("offers the Tailscale login link from the authenticated status while the node waits for login (REQ-SEC-042)", async () => {

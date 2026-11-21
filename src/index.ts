@@ -44,10 +44,10 @@ interface Env {
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 30;
+const MONITOR_REVISION = 34;
 
 export { MonitorGateway } from "./do";
-import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
+import { AUTH_COOKIE_MAX_AGE_S, authCookieExpiry, authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
 
 const HMAC_WINDOW_S = 300;
 
@@ -194,6 +194,9 @@ const DASHBOARD = `<!DOCTYPE html>
   function key() { return document.getElementById('key').value.trim(); }
   function headers() { return key() ? { Authorization: 'Bearer ' + key() } : {}; }
   let loggedIn = false;
+  let nodeRunning = false;
+  let dataEpoch = 0;
+  function canReadData() { return loggedIn && nodeRunning; }
   function setLoggedIn(v) {
     loggedIn = v;
     document.getElementById('authbtn').textContent = v ? 'ログアウト' : 'キー登録';
@@ -202,11 +205,19 @@ const DASHBOARD = `<!DOCTYPE html>
     a.textContent = 'このブラウザのキー認証: ' + (v ? '認証済み' : '未認証');
     applyAuthGate();
   }
-  // 未認証の間は、キー入力窓より下のセクション全体をグレーアウトして操作できなくする(REQ-SEC-040)。
+  // ブラウザの認証と Tailscale ノードの参加をともに確認したときだけデータ取得を許す。
   function applyAuthGate() {
     const g = document.getElementById('gated');
-    g.classList.toggle('off', !loggedIn);
-    g.inert = !loggedIn;
+    const locked = !canReadData();
+    const wasLocked = g.inert;
+    g.classList.toggle('off', locked);
+    g.inert = locked;
+    if (wasLocked && !locked) loadSections();
+    if (!wasLocked && locked) {
+      dataEpoch++;
+      for (const [name] of SECTIONS) delete data[name];
+      render();
+    }
   }
   // Cookie だけで認証が通るかを見る(キーは送らない)。通ればログイン中である。
   async function probeLogin() {
@@ -232,20 +243,28 @@ const DASHBOARD = `<!DOCTYPE html>
         setLoggedIn(true);
         msg.textContent = '';
         document.getElementById('key').value = '';
-        loadAll();
+        loadStatus();
+        loadLoginState();
       } else {
         msg.textContent = 'キーが違います';
       }
     } catch (err) { msg.textContent = '登録失敗: ' + err; }
   }
   async function load(name) {
+    if (!canReadData()) return;
+    const epoch = dataEpoch;
     data[name] = "取得中…"; render();
     try {
       const r = await fetch('/api/monitor/' + name, { headers: headers() });
+      if (epoch !== dataEpoch) return;
       if (r.status === 401) setLoggedIn(false);
       const j = await r.json();
+      if (epoch !== dataEpoch) return;
       data[name] = j.output !== undefined ? j.output : JSON.stringify(j, null, 2);
-    } catch (err) { data[name] = '取得失敗: ' + err; }
+    } catch (err) {
+      if (epoch !== dataEpoch) return;
+      data[name] = '取得失敗: ' + err;
+    }
     render();
   }
   // 手動の再確認ボタン(REQ-SEC-056): DO 側のノード確認を即時に駆動してから、状態表示を読み直す。
@@ -277,8 +296,10 @@ const DASHBOARD = `<!DOCTYPE html>
     const el = document.getElementById('loginstat');
     try {
       const r = await fetch('/health');
+      if (!r.ok) throw new Error('health HTTP ' + r.status);
       const j = await r.json();
       const state = j.node && j.node.node;
+      nodeRunning = state === 'Running';
       // 自ノードの IP を併記する(REQ-SEC-043)。色はログイン状態と同じ規則で、
       // 修復(状態破棄と再参加)の前後で IP と色の変化が画面で分かる。
       const ip = (j.node && j.node.ip) || '未割当';
@@ -309,11 +330,21 @@ const DASHBOARD = `<!DOCTYPE html>
         }
       }
     } catch (err) {
+      nodeRunning = false;
       el.className = 'login-ng';
-      el.textContent = 'ノードのログイン状態: 未ログイン（取得失敗）';
+      el.textContent = 'ノードのログイン状態: 未確認（取得失敗）';
     }
+    applyAuthGate();
   }
-  function loadAll() { loadLoginState(); loadStatus(); for (const [name] of SECTIONS) load(name); }
+  function loadSections() {
+    for (const [name] of SECTIONS) load(name);
+  }
+  async function loadAll() {
+    if (!canReadData()) return;
+    loadStatus();
+    await loadLoginState();
+    if (canReadData()) loadSections();
+  }
   // ログイン状態と IP は30秒ごとに取り直し、修復による変化を画面に映す(REQ-SEC-043)。
   setInterval(loadLoginState, 30000);
   setInterval(() => { if (loggedIn) loadStatus(); }, 5000);
@@ -507,7 +538,8 @@ export default {
 
     if (url.pathname.startsWith("/api/monitor/") && request.method === "GET") {
       const byKey = bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY);
-      if (!byKey && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
+      const expires = byKey ? null : await authCookieExpiry(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS());
+      if (!byKey && expires === null) {
         audit(url.pathname, "none", "rejected");
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
@@ -515,13 +547,21 @@ export default {
       const section = url.pathname.slice("/api/monitor/".length);
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
       const stub = env.MONITOR_GATEWAY.get(id);
-      return stub.fetch(`http://do/monitor/${section}`);
+      const result = await stub.fetch(`http://do/monitor/${section}`);
+      if (expires !== null && expires <= nowS()) {
+        await result.body?.cancel().catch(() => {});
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      return result;
     }
 
     if (url.pathname === "/api/live" && request.method === "GET") {
       // ライブ表示ページ用 WebSocket (REQ-SEC-037)。認証は upgrade の前に済ませる。
       const byKey = bearerMatches(request.headers.get("Authorization"), env.WORKER_API_KEY);
-      if (!byKey && !(await authCookieValid(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS()))) {
+      const expires = byKey
+        ? nowS() + AUTH_COOKIE_MAX_AGE_S
+        : await authCookieExpiry(request.headers.get("Cookie"), env.WORKER_API_KEY, nowS());
+      if (expires === null || (!byKey && request.headers.get("Origin") !== url.origin)) {
         audit("/api/live", "none", "rejected");
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
@@ -532,7 +572,9 @@ export default {
       audit("/api/live", byKey ? "bearer" : "cookie", "accepted");
       const id = env.MONITOR_GATEWAY.idFromName("monitor-gateway");
       const stub = env.MONITOR_GATEWAY.get(id);
-      return stub.fetch("http://do/live", request);
+      return stub.fetch("http://do/live", new Request("http://do/live", {
+        headers: { Upgrade: "websocket", "X-Muse-Live-Expires": String(expires) },
+      }));
     }
 
     return Response.json({ error: "not found" }, { status: 404 });
