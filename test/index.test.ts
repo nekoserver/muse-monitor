@@ -52,7 +52,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 39,
+      status: "ok", worker: "muse-monitor", revision: 40,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -65,7 +65,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 39, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 40, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -73,6 +73,23 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/"), env);
     expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
     expect(await res.text()).toContain("<title>muse-monitor</title>");
+  });
+
+  it("GET /health-history needs no key and returns what the DO recorded (REQ-SEC-049)", async () => {
+    const { env, calls } = makeEnv();
+    const res = await worker.fetch(call("/health-history"), env);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ from: "do", url: "http://do/history" });
+    expect(calls).toEqual(["http://do/history"]);
+  });
+
+  it("the dashboard carries the hourly health chart at the top, reading /health-history (REQ-SEC-049)", async () => {
+    const { env } = makeEnv();
+    const html = await (await worker.fetch(call("/"), env)).text();
+    expect(html).toContain('id="healthchart"');
+    expect(html).toContain("fetch('/health-history')");
+    expect(html).toContain('id="healthchart-detail"');
+    expect(html).toContain("loadHealthChart()");
   });
 
   it("unknown paths and non-GET methods return 404", async () => {

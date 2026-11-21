@@ -822,11 +822,12 @@ describe("live WebSocket (REQ-SEC-037)", () => {
     expect(nodes[0].requests).toHaveLength(count);
   });
 
-  it("on alarm with no sockets connected, does not re-arm and does not start the node", async () => {
+  it("on alarm with no sockets connected, does not sweep or start the node, but keeps the hourly sample armed (REQ-SEC-046)", async () => {
     const store = makeCtx({ "ts-state-epoch": 1 });
     const gw = gateway(ENV, store.ctx);
     await gw.alarm();
-    expect(store.alarmAt()).toBeNull();
+    expect(store.alarmAt()).not.toBeNull();
+    expect(store.alarmAt()).toBe(store.stored.get("ts-sample-next"));
     expect(nodes).toHaveLength(0);
   });
 
@@ -984,6 +985,109 @@ describe("boot log (SPEC REQ-SEC-044/045)", () => {
     const st = await (await get(stGw, "/status")).json();
     expect(st.bootLog).toHaveLength(20);
     expect(st.bootLog[0].startedAt).toBe(seeded[5].startedAt);
+  });
+});
+
+describe("hourly samples and history (REQ-SEC-046/049/051)", () => {
+  it("records a sample when the alarm fires at the sample time, and arms the next hour", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = makeCtx({ "ts-sample-next": 1 });
+      const gw = gateway(ENV, store.ctx);
+      await gw.alarm();
+      const samples = store.stored.get("ts-samples") as Array<Record<string, unknown>>;
+      expect(samples).toHaveLength(1);
+      expect(samples[0]).toMatchObject({ node: "not-started", lastOutcome: null, ip: null });
+      expect(typeof samples[0].at).toBe("string");
+      const next = store.stored.get("ts-sample-next") as number;
+      expect(next).toBeGreaterThan(Date.now());
+      expect(next - Date.now()).toBeLessThanOrEqual(3_600_000);
+      expect(store.alarmAt()).toBe(next);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records the Running state, the node's own IP and the last attempt outcome", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = makeCtx({ "ts-sample-next": Date.now() + 60_000 });
+      const gw = gateway(ENV, store.ctx);
+      await get(gw, "/monitor/jobs"); // node up; the boot attempt closed as running
+      await vi.advanceTimersByTimeAsync(60_000); // reach the sample time
+      await gw.alarm();
+      const samples = store.stored.get("ts-samples") as Array<Record<string, unknown>>;
+      expect(samples).toHaveLength(1);
+      expect(samples[0]).toMatchObject({ node: "Running", lastOutcome: "running", ip: "100.99.0.5" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not sample before the sample time, and re-arms for it without any sockets", async () => {
+    const future = Date.now() + 1_800_000;
+    const store = makeCtx({ "ts-sample-next": future });
+    const gw = gateway(ENV, store.ctx);
+    await gw.alarm();
+    expect(store.stored.get("ts-samples")).toBeUndefined();
+    expect(store.alarmAt()).toBe(future);
+    expect(nodes).toHaveLength(0);
+  });
+
+  it("caps the samples at 168 and drops the oldest", async () => {
+    const seeded = Array.from({ length: 168 }, (_, i) => ({ at: `seed-${i}`, node: "Running", lastOutcome: "running", ip: null }));
+    const store = makeCtx({ "ts-samples": seeded, "ts-sample-next": 1 });
+    const gw = gateway(ENV, store.ctx);
+    await gw.alarm();
+    const samples = store.stored.get("ts-samples") as Array<Record<string, unknown>>;
+    expect(samples).toHaveLength(168);
+    expect(samples[0].at).toBe("seed-1");
+    expect(samples.at(-1)!.at).not.toMatch(/^seed-/);
+  });
+
+  it("sampling does not destroy the persisted node state", async () => {
+    const state = { "_current-profile": "profile-1", "profile-1": "{}" };
+    const store = makeCtx({ "ts-state": state, "ts-state-epoch": 1, "ts-sample-next": 1 });
+    const gw = gateway(ENV, store.ctx);
+    await gw.alarm();
+    // The sample itself is recorded synchronously by the alarm; the node
+    // start it kicks off runs in the background and is not awaited here.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(store.stored.get("ts-state")).toMatchObject(state);
+    expect(store.stored.get("ts-samples")).toHaveLength(1);
+  });
+
+  it("GET /history reads samples and boot records without starting the node or fetching sections (REQ-SEC-051)", async () => {
+    const store = makeCtx();
+    const gw = gateway(ENV, store.ctx);
+    const res = await get(gw, "/history");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ samples: [], bootLog: [] });
+    await Promise.all(store.waits);
+    expect(nodes).toHaveLength(0);
+  });
+
+  it("GET /history returns the recorded samples and boot log, with no login URL or key values", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = makeCtx({ "ts-sample-next": Date.now() + 60_000 });
+      const gw = gateway(ENV, store.ctx);
+      await get(gw, "/monitor/jobs");
+      await vi.advanceTimersByTimeAsync(60_000); // reach the sample time
+      await gw.alarm();
+      const before = nodes[0].requests.length;
+      const res = await get(gw, "/history");
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const body = JSON.parse(text) as { samples: Array<Record<string, unknown>>; bootLog: unknown[] };
+      expect(body.samples).toHaveLength(1);
+      expect(body.samples[0]).toMatchObject({ node: "Running", ip: "100.99.0.5" });
+      expect(body.bootLog.length).toBeGreaterThanOrEqual(1);
+      expect(nodes[0].requests).toHaveLength(before);
+      for (const secret of ["100.86.29.77", "tskey-auth-secret", "receiver-key-secret", "login.tailscale.com"]) expect(text).not.toContain(secret);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
