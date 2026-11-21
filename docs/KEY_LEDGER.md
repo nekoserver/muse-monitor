@@ -8,14 +8,15 @@ muse-monitor が読む鍵の一覧。仕様は `SPEC.muse-monitor.security.harde
 | 名前 | 発行者 | 用途 | 消費側 | 設定場所 | ローテーション | 状態 |
 |------|--------|------|--------|----------|--------------|------|
 | `TS_AUTHKEY` | Tailscale | WASM ノードの tailnet 参加専用。receiver へは送らない | `src/do.ts`（MonitorGateway のノード参加） | muse-monitor の Worker シークレット | Tailscale 管理画面で新しい認証キーを発行し、シークレットを差し替える。旧キーは管理画面で失効させる | 設定済み（2026-11-16。`/health` の authKeySource は `TS_AUTHKEY`） |
-| `TS_API_KEY` | 運用者（任意文字列） | receiver への Bearer 専用。tailnet 参加には使わない | `src/do.ts`（receiver 呼び出し）、receiver 側は `receiver.py` | muse-monitor の Worker シークレットと、muse-vm の鍵ファイル `~/.config/muse-receiver.env`（両方に同じ値） | 両側の値を同時に差し替える。片側だけ変えると `receiver_unauthorized` になる | 設定済み（receiver 側の照合は有効。2026-11-16 に有効化し、401/200 を実経路で確認した） |
+| `TS_API_KEY` | 運用者（任意文字列） | receiver への Bearer 専用。tailnet 参加には使わない | `src/do.ts`（receiver 呼び出し）、receiver 側は `receiver.py` | muse-monitor の Worker シークレットと、muse-vm の鍵ファイル `~/.config/muse-receiver.env`（両方に同じ値） | receiver 側を先に変え、receiver を再起動して指紋を確認してから、Worker のシークレットを同じ値に合わせ、両端の指紋の一致と section の実読み取りで確認する（SPEC REQ-SEC-059。正は receiver 側） | 設定済み（receiver 側の照合は有効。2026-11-16 に有効化し、401/200 を実経路で確認した）。2026-11-21 時点で Worker 側の値が receiver 側（指紋 7b3d979c）と不一致で `receiver_unauthorized` になっている |
 | `WORKER_API_KEY` | 運用者（任意文字列） | `/api/*` の Bearer 認証と、ログイン Cookie（`mm_auth`）の署名 | `src/index.ts`、`src/auth-cookie.ts` | muse-monitor の Worker シークレット | シークレットを差し替える。差し替えると既存のログイン Cookie は全て無効になり、利用者は再ログインが必要になる | 設定済み |
 | `MONITOR_HMAC_SECRET` | 運用者（任意文字列） | 本体 Worker からの `/api/hmac/*` 呼び出しの HMAC 署名 | `src/index.ts` | muse-monitor と本体 Worker の両方のシークレット（両方に同じ値） | 両側を同時に差し替える。片側だけ変えると本体 Worker の呼び出しが 401 になる | 設定済み |
 
 ## receiver 側の鍵ファイルについて
 
 - `~/.config/muse-receiver.env` は `TS_API_KEY` の receiver 側の置き場所であり、
-  別の鍵ではない。
+  別の鍵ではない。`TS_API_KEY` の正はこのファイルであり、Worker のシークレットは
+  ここから配られた写しである。食い違った場合はこちらに合わせる（SPEC REQ-SEC-059）。
 - `~/.local/share/muse-code-wasm/api-key` は muse-code-wasm 用の置き場所で、
   現在は同じ値が入っている。値が同じでも、鍵は `TS_API_KEY` の1つである。
 

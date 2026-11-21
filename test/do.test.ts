@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MonitorGateway, RECEIVER_RETRIES, RECEIVER_RETRY_DELAY_MS } from "../src/do";
 import type { IPNCallbacks, IPNConfig } from "../src/wasm-ipn";
@@ -107,6 +108,8 @@ function makeCtx(initial: Record<string, unknown> = {}) {
   return { ctx: ctx as unknown as DurableObjectState, stored, waits, sockets, alarmAt: () => alarmAt };
 }
 const ENV = { TS_AUTHKEY: "tskey-auth-secret", TS_API_KEY: "receiver-key-secret" };
+/** SPEC v21 REQ-SEC-060: a key fingerprint is the first 8 hex chars of its SHA-256. */
+const fp = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 8);
 const gateway = (env: Record<string, string> = ENV, ctx = makeCtx().ctx) => new MonitorGateway(ctx, env as never);
 const get = (gw: MonitorGateway, path: string) => gw.fetch(new Request(`http://do${path}`));
 
@@ -134,7 +137,33 @@ describe("GET /monitor/<section>", () => {
     expect(await res.json()).toEqual({ error: "timeout" });
   });
 
-  it("reports a receiver 401 as an upstream failure distinct from an expired browser session", async () => {
+  it("reports a receiver 401 as an upstream failure distinct from an expired browser session, with both key fingerprints (SPEC v21 REQ-SEC-060/061)", async () => {
+    const gw = gateway();
+    await get(gw, "/monitor/status");
+    const receiverBody = JSON.stringify({
+      error: "unauthorized",
+      expectedKeyFingerprint: fp("the-receivers-actual-key"),
+      presentedKeyFingerprint: fp("receiver-key-secret"),
+    });
+    nodes[0].handler = async (req) =>
+      new URL(req.url).pathname === "/health" ? { status: 200 } : { status: 401, body: receiverBody };
+    const res = await get(gw, "/monitor/status");
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      error: "receiver_unauthorized", upstreamStatus: 401, keySource: "TS_API_KEY",
+      presentedKeyFingerprint: fp("receiver-key-secret"),
+      expectedKeyFingerprint: fp("the-receivers-actual-key"),
+      receiver: { error: "unauthorized" },
+    });
+    // The canonical side is the receiver: the message must say which way to align.
+    expect(body.message).toContain("TS_API_KEY");
+    expect(JSON.stringify(body)).not.toContain("tskey-auth-secret");
+    expect(JSON.stringify(body)).not.toContain("receiver-key-secret");
+    expect(JSON.stringify(body)).not.toContain("the-receivers-actual-key");
+  });
+
+  it("still names the presented fingerprint when the receiver answers a bare 401 without fingerprints (older receiver)", async () => {
     const gw = gateway();
     await get(gw, "/monitor/status");
     nodes[0].handler = async (req) =>
@@ -142,10 +171,22 @@ describe("GET /monitor/<section>", () => {
     const res = await get(gw, "/monitor/status");
     expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body).toMatchObject({ error: "receiver_unauthorized", upstreamStatus: 401, keySource: "TS_API_KEY", receiver: { error: "unauthorized" } });
-    expect(body.message).toContain("TS_API_KEY");
-    expect(JSON.stringify(body)).not.toContain("tskey-auth-secret");
+    expect(body).toMatchObject({
+      error: "receiver_unauthorized",
+      presentedKeyFingerprint: fp("receiver-key-secret"),
+      expectedKeyFingerprint: null,
+    });
     expect(JSON.stringify(body)).not.toContain("receiver-key-secret");
+  });
+
+  it("exposes the presented receiver key fingerprint on the authenticated status only (SPEC v21 REQ-SEC-060)", async () => {
+    const gw = gateway();
+    const status = await (await get(gw, "/status")).json();
+    expect(status.receiverKeyFingerprint).toBe(fp("receiver-key-secret"));
+    const publicText = await (await get(gw, "/public-status")).text();
+    expect(publicText).not.toContain("receiverKeyFingerprint");
+    expect(publicText).not.toContain(fp("receiver-key-secret"));
+    expect(publicText).not.toContain("receiver-key-secret");
   });
 
   it.each([false, true])("discards in-flight data after a disconnect (reconnected: %s)", async (reconnected) => {
@@ -162,14 +203,14 @@ describe("GET /monitor/<section>", () => {
     expect(nodes[0].requests).toHaveLength(3);
   });
 
-  it("explains a 503 from the receiver as a missing key on the receiver side", async () => {
+  it("explains a 503 from the receiver as a missing key on the receiver side (one name: receiver_key_not_configured, SPEC v21 REQ-SEC-062)", async () => {
     const gw = gateway();
     await get(gw, "/monitor/status");
     nodes[0].handler = async (req) =>
-      new URL(req.url).pathname === "/health" ? { status: 200 } : { status: 503, body: "no key" };
+      new URL(req.url).pathname === "/health" ? { status: 200 } : { status: 503, body: '{"error":"receiver_key_not_configured"}' };
     const res = await get(gw, "/monitor/status");
     expect(res.status).toBe(503);
-    expect(await res.json()).toMatchObject({ error: "receiver_key_not_configured", receiver: "no key" });
+    expect(await res.json()).toMatchObject({ error: "receiver_key_not_configured", receiver: { error: "receiver_key_not_configured" } });
   });
 
   it("TS_AUTHKEY alone does not open the receiver: without TS_API_KEY the answer is receiver_key_missing and the node is not started", async () => {
