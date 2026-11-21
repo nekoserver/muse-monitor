@@ -834,20 +834,25 @@ export class MonitorGateway extends DurableObject<Env> {
    * CLAIMS_TTL_S (relative to the incoming timestamp) are pruned.
    */
   private async hmacClaim(request: Request): Promise<Response> {
-    let body: { sig?: unknown; ts?: unknown };
+    let body: { sig?: unknown; ts?: unknown; route?: unknown };
     try {
-      body = (await request.json()) as { sig?: unknown; ts?: unknown };
+      body = (await request.json()) as { sig?: unknown; ts?: unknown; route?: unknown };
     } catch {
       return Response.json({ error: "bad request" }, { status: 400 });
     }
-    const { sig, ts } = body;
-    if (typeof sig !== "string" || !/^[0-9a-f]{64}$/.test(sig) || typeof ts !== "number" || !Number.isFinite(ts)) {
+    const { sig, ts, route } = body;
+    if (typeof sig !== "string" || !/^[0-9a-f]{64}$/.test(sig) || typeof ts !== "number" || !Number.isFinite(ts)
+      || typeof route !== "string" || !route.startsWith("/api/hmac/") || route.length > 128) {
       return Response.json({ error: "bad request" }, { status: 400 });
     }
+    // Claims are per (route, signature) (REQ-SEC-066). Keys stored before
+    // the route was part of the claim never match a composite key and are
+    // pruned by the same TTL as before.
+    const claimKey = `${route}\n${sig}`;
     const claims = await this.loadClaims();
     for (const [s, t] of claims) if (t < ts - CLAIMS_TTL_S) claims.delete(s);
-    if (claims.has(sig)) return Response.json({ ok: false });
-    claims.set(sig, ts);
+    if (claims.has(claimKey)) return Response.json({ ok: false });
+    claims.set(claimKey, ts);
     const flushed = this.ctx.storage
       .put(CLAIMS_KEY, Object.fromEntries(claims))
       .catch((err: unknown) => {

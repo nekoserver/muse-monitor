@@ -843,8 +843,8 @@ describe("live WebSocket (REQ-SEC-037)", () => {
 });
 
 describe("POST /hmac-claim (HMAC replay prevention, SPEC REQ-SEC-011/012)", () => {
-  const claim = (gw: MonitorGateway, sig: string, ts: number) =>
-    gw.fetch(new Request("http://do/hmac-claim", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sig, ts }) }));
+  const claim = (gw: MonitorGateway, sig: string, ts: number, route = "/api/hmac/status") =>
+    gw.fetch(new Request("http://do/hmac-claim", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sig, ts, route }) }));
   const SIG_A = "a".repeat(64);
   const SIG_B = "b".repeat(64);
 
@@ -870,9 +870,17 @@ describe("POST /hmac-claim (HMAC replay prevention, SPEC REQ-SEC-011/012)", () =
     expect(await (await claim(gw, SIG_A, 1_601)).json()).toEqual({ ok: true });
   });
 
+  it("claims are per route: the same signature is claimable once on each route (REQ-SEC-066)", async () => {
+    const gw = gateway();
+    expect(await (await claim(gw, SIG_A, 1_000, "/api/hmac/status")).json()).toEqual({ ok: true });
+    expect(await (await claim(gw, SIG_A, 1_000, "/api/hmac/monitor/status")).json()).toEqual({ ok: true });
+    expect(await (await claim(gw, SIG_A, 1_000, "/api/hmac/status")).json()).toEqual({ ok: false });
+    expect(await (await claim(gw, SIG_A, 1_000, "/api/hmac/monitor/status")).json()).toEqual({ ok: false });
+  });
+
   it("rejects malformed claims with 400", async () => {
     const gw = gateway();
-    for (const body of [{ sig: "xyz", ts: 1_000 }, { sig: SIG_A, ts: "soon" }, { sig: SIG_A }, {}]) {
+    for (const body of [{ sig: "xyz", ts: 1_000 }, { sig: SIG_A, ts: "soon" }, { sig: SIG_A }, {}, { sig: SIG_A, ts: 1_000 }, { sig: SIG_A, ts: 1_000, route: "status" }, { sig: SIG_A, ts: 1_000, route: "/api/status" }]) {
       const res = await gw.fetch(new Request("http://do/hmac-claim", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
       expect(res.status).toBe(400);
     }

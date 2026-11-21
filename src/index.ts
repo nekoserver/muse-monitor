@@ -62,14 +62,23 @@ function timingSafeEqual(a: string, b: string): boolean {
  * HMAC check for the main Worker (machine-to-machine).
  * The caller sends:
  *   X-Muse-Timestamp: unix seconds
- *   X-Muse-Signature: hex HMAC-SHA256(MONITOR_HMAC_SECRET, "<ts>.<section>")
- * Accepted within ±300 s. The secret is shared with the main Worker and
- * set by the operator on both sides; it never appears in the repo.
+ *   X-Muse-Signature: hex HMAC-SHA256(MONITOR_HMAC_SECRET, "<ts>.<route>.<section>")
+ * The signature is bound to the route it was minted for (REQ-SEC-066): a
+ * signature for one /api/hmac/* route never verifies at another, even for
+ * the same section. Accepted within ±300 s. The secret is shared with the
+ * main Worker and set by the operator on both sides; it never appears in
+ * the repo.
+ *
+ * Transition (REQ-SEC-067): on the /api/hmac/monitor/* routes the legacy
+ * form "<ts>.<section>" is still accepted until the signer side has been
+ * confirmed on the new form; /api/hmac/status — the route whose response
+ * carries the Tailscale login URL — accepts the route-bound form only.
  */
 async function hmacMatches(
   request: Request,
   secret: string,
   section: string,
+  route: string,
 ): Promise<boolean> {
   if (!secret) return false;
   const ts = request.headers.get("X-Muse-Timestamp");
@@ -86,15 +95,14 @@ async function hmacMatches(
     false,
     ["sign"],
   );
-  const mac = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(`${ts}.${section}`),
-  );
-  const expected = [...new Uint8Array(mac)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  return timingSafeEqual(expected, sig.toLowerCase());
+  const macHex = async (message: string): Promise<string> => {
+    const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+    return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  };
+  const presented = sig.toLowerCase();
+  if (timingSafeEqual(await macHex(`${ts}.${route}.${section}`), presented)) return true;
+  if (route !== "/api/hmac/status" && timingSafeEqual(await macHex(`${ts}.${section}`), presented)) return true;
+  return false;
 }
 
 function nowS(): number { return Math.floor(Date.now() / 1000); }
@@ -534,13 +542,13 @@ function audit(route: string, auth: AuditAuth, result: AuditResult, section?: st
  * signature cannot be replayed inside its validity window
  * (SPEC REQ-SEC-011/013). "unavailable" fails closed.
  */
-async function claimSignature(env: Env, sig: string, ts: number): Promise<"claimed" | "replay" | "unavailable"> {
+async function claimSignature(env: Env, sig: string, ts: number, route: string): Promise<"claimed" | "replay" | "unavailable"> {
   try {
     const stub = env.MONITOR_GATEWAY.get(env.MONITOR_GATEWAY.idFromName("monitor-gateway"));
     const res = await stub.fetch("http://do/hmac-claim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sig, ts }),
+      body: JSON.stringify({ sig, ts, route }),
     });
     if (res.status !== 200) return "unavailable";
     const body = (await res.json()) as { ok?: unknown };
@@ -557,13 +565,13 @@ async function claimSignature(env: Env, sig: string, ts: number): Promise<"claim
  * Returns null when the request may proceed, else the refusal response.
  */
 async function hmacGate(request: Request, env: Env, section: string, route: string): Promise<Response | null> {
-  if (!(await hmacMatches(request, env.MONITOR_HMAC_SECRET, section))) {
+  if (!(await hmacMatches(request, env.MONITOR_HMAC_SECRET, section, route))) {
     audit(route, "hmac", "rejected", section);
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
   const sig = (request.headers.get("X-Muse-Signature") ?? "").toLowerCase();
   const ts = Number(request.headers.get("X-Muse-Timestamp"));
-  const claim = await claimSignature(env, sig, ts);
+  const claim = await claimSignature(env, sig, ts, route);
   if (claim === "replay") {
     audit(route, "hmac", "replay", section);
     return Response.json({ error: "replay" }, { status: 401 });
