@@ -52,7 +52,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 35,
+      status: "ok", worker: "muse-monitor", revision: 36,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -65,7 +65,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 35, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 36, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -265,6 +265,32 @@ describe("dashboard layout", () => {
     expect(active.getView()).toBe("tree");
     expect(page("mm_view=invalid").getView()).toBe("panel");
   });
+});
+
+it("colors OK, only zero FAIL counts and exact installed-version matches", async () => {
+  const { env } = makeEnv();
+  const html = await (await worker.fetch(call("/"), env)).text();
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]
+    .split("\n  render();\n  loadLoginState();")[0];
+  const { formatOutput } = runInNewContext(script + "\n({ formatOutput })", {
+    setInterval: () => {}, window: {},
+    document: {
+      createElement: () => ({
+        set textContent(text: string) { this.innerHTML = text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); },
+        innerHTML: "",
+      }),
+    },
+  });
+  const diag = formatOutput("diag", "OK test / FAIL 0 / FAIL 1\n<script>");
+  expect(diag).toContain('<span class="is-ok">OK</span>');
+  expect(diag).toContain('FAIL <span class="is-ok">0</span>');
+  expect(diag).toContain("FAIL 1");
+  expect(diag).toContain("&lt;script&gt;");
+  const packages = formatOutput("pkgs", "curl\t1.2\t1.2\nruby\t3.1\t3.2\nlocal\t1.2\t未確認");
+  expect(packages).toContain('curl\t<span class="is-ok">1.2</span>\t1.2');
+  expect(packages).toContain("ruby\t3.1\t3.2");
+  expect(packages).toContain("local\t1.2\t未確認");
+  expect(formatOutput("pkgs", "== Nix profile ==\ncurl-1.2")).toContain("最新版候補: 未確認");
 });
 
 describe("HMAC routes", () => {

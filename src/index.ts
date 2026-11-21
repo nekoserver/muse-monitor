@@ -44,7 +44,7 @@ interface Env {
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 35;
+const MONITOR_REVISION = 36;
 
 export { MonitorGateway } from "./do";
 import { AUTH_COOKIE_MAX_AGE_S, authCookieExpiry, authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -140,7 +140,7 @@ const DASHBOARD = `<!DOCTYPE html>
         padding: .6em 1em; overflow-x: auto; white-space: pre-wrap; }
   .meta { color: #999; font-size: .85em; }
   #loginstat, #authstat { font-size: 1.05em; }
-  .login-ok { color: #7ee787; font-weight: bold; }
+  .is-ok, .login-ok { color: #7ee787; font-weight: bold; }
   .login-ng { color: #ff7b72; font-weight: bold; }
   button { margin-left: .5em; cursor: pointer; }
   #gated.off { opacity: .45; pointer-events: none; filter: grayscale(1); }
@@ -360,14 +360,29 @@ const DASHBOARD = `<!DOCTYPE html>
   setInterval(loadLoginState, 30000);
   setInterval(() => { if (loggedIn) loadStatus(); }, 5000);
   function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+  function formatOutput(name, value) {
+    const text = String(value ?? '（未取得）');
+    if (name === 'pkgs') {
+      if (/^== Nix profile ==/m.test(text) && !text.includes('パッケージ')) {
+        return '最新版候補: 未確認（受信側から候補の応答なし）' + '\\n\\n' + esc(text);
+      }
+      return text.split('\\n').map(line => {
+        const fields = line.split('\\t');
+        if (fields.length !== 3 || fields[1] !== fields[2] || !/^[0-9]/.test(fields[1])) return esc(line);
+        return esc(fields[0]) + '\\t<span class="is-ok">' + esc(fields[1]) + '</span>\\t' + esc(fields[2]);
+      }).join('\\n');
+    }
+    return esc(text).replace(/\\b(OK|FAIL([ \\t]+)0(?![\\w.]))\\b/g, (match, token, gap) =>
+      gap === undefined ? '<span class="is-ok">OK</span>' : 'FAIL' + gap + '<span class="is-ok">0</span>');
+  }
   function card(name) {
     return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
       ' <button type="button" onclick="load(\\'' + name + '\\')">再取得</button></h2><pre id="data-' + name + '">' +
-      esc(data[name] ?? '（未取得）') + '</pre></section>';
+      formatOutput(name, data[name]) + '</pre></section>';
   }
   function renderSectionData(name) {
     const output = document.getElementById('data-' + name);
-    if (output) output.textContent = data[name];
+    if (output) output.innerHTML = formatOutput(name, data[name]);
     updatePanelSection();
   }
   function updatePanelSection() {
