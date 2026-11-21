@@ -53,3 +53,18 @@ pending / execlog / sdkhealth / sdkprofiles / sdksessions / sdkts / hooks
   （`TS_API_KEY`）を合わせて変更すること
 - `TS_AUTHKEY` は受信側の鍵ではない（WASM ノードの tailnet 参加専用）。
   受信側が Bearer として受け付けるのは `TS_API_KEY` のみ
+
+## TS_API_KEY を揃える正しい手順
+
+鍵の正は受信側の `/home/hatch/.config/muse-receiver.env`。順序は、受信側の値を先に決め、Worker のシークレットをそれに合わせ、最後に指紋で照合する（REQ-SEC-059）。
+
+1. 受信側の値を決める。付け替えは `receiver-key.sh` で行う（`set` は値を標準入力から読む。値をコマンドラインに書かない。シェルの履歴に残る）。SSH ログインのシェルは HOME が /root になるため、対象ファイルは絶対パスで明示する。付けないと `/root/.config/muse-receiver.env` を読み書きし、本体には届かない。
+
+   ```
+   MUSE_RECEIVER_ENV=/home/hatch/.config/muse-receiver.env sh /home/hatch/lib/muse/samples/receiver-key.sh set
+   ```
+
+2. Worker 側は Cloudflare ダッシュボードの muse-monitor → Settings → Variables and Secrets で、シークレット `TS_API_KEY` に同じ値を保存する。
+3. シークレットの保存は、稼働中の gateway（Durable Object）には即時反映されない。反映は DO が作り直されたとき（コードのデプロイ時）に起きる。保存直後に 401 でも、保存した値が誤っているとは限らない（2026-11-21 実測: 保存 19:59 → 反映はデプロイ後の 20:05）。
+4. 照合は値ではなく指紋で行う。受信側 `/health` の `keyFingerprint` と、認証済み `/api/status` の `receiverKeyFingerprint` が一致し、`/api/monitor/status` が section の中身（200）を返せば完了。
+5. この状態は VM の再起動では戻らない。鍵ファイルは `~` 配下にあり永続し、受信側は再起動後に同じファイルを読み直す。Worker のシークレットは Cloudflare 側にあり、VM の再起動とは無関係。
