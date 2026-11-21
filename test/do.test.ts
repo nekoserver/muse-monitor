@@ -76,6 +76,9 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 class FakeSocket {
   sent: string[] = [];
   closed = false;
+  attachment: unknown;
+  serializeAttachment(value: unknown) { this.attachment = structuredClone(value); }
+  deserializeAttachment() { return this.attachment; }
   send(data: string) { this.sent.push(data); }
   close() { this.closed = true; }
 }
@@ -131,18 +134,32 @@ describe("GET /monitor/<section>", () => {
     expect(await res.json()).toEqual({ error: "timeout" });
   });
 
-  it("explains a 401 from the receiver instead of relaying a bare unauthorized", async () => {
+  it("reports a receiver 401 as an upstream failure distinct from an expired browser session", async () => {
     const gw = gateway();
     await get(gw, "/monitor/status");
     nodes[0].handler = async (req) =>
       new URL(req.url).pathname === "/health" ? { status: 200 } : { status: 401, body: '{"error":"unauthorized"}' };
     const res = await get(gw, "/monitor/status");
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body).toMatchObject({ error: "receiver_unauthorized", keySource: "TS_API_KEY", receiver: { error: "unauthorized" } });
+    expect(body).toMatchObject({ error: "receiver_unauthorized", upstreamStatus: 401, keySource: "TS_API_KEY", receiver: { error: "unauthorized" } });
     expect(body.message).toContain("TS_API_KEY");
     expect(JSON.stringify(body)).not.toContain("tskey-auth-secret");
     expect(JSON.stringify(body)).not.toContain("receiver-key-secret");
+  });
+
+  it.each([false, true])("discards in-flight data after a disconnect (reconnected: %s)", async (reconnected) => {
+    const gw = gateway();
+    await get(gw, "/monitor/jobs");
+    nodes[0].handler = async () => {
+      nodes[0].callbacks!.notifyState("NeedsLogin");
+      if (reconnected) nodes[0].up();
+      return { status: 200, body: '{"output":"stale result"}' };
+    };
+    const response = await get(gw, "/monitor/jobs");
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: "tailnet_unavailable" });
+    expect(nodes[0].requests).toHaveLength(3);
   });
 
   it("explains a 503 from the receiver as a missing key on the receiver side", async () => {
@@ -703,7 +720,8 @@ describe("live WebSocket (REQ-SEC-037)", () => {
     (globalThis as Record<string, unknown>).Response = RealResponse;
     delete (globalThis as Record<string, unknown>).WebSocketPair;
   });
-  const liveReq = () => new Request("http://do/live", { headers: { Upgrade: "websocket" } });
+  const liveReq = (expires = Math.floor(Date.now() / 1000) + 60) =>
+    new Request("http://do/live", { headers: { Upgrade: "websocket", "X-Muse-Live-Expires": String(expires) } });
 
   it("rejects a non-upgrade request with 426", async () => {
     const gw = gateway(ENV, makeCtx({ "ts-state-epoch": 1 }).ctx);
@@ -737,6 +755,30 @@ describe("live WebSocket (REQ-SEC-037)", () => {
     expect(new Set(frames.map((f) => f.section))).toEqual(new Set(["status", "diag", "jobs", "pkgs", "vm", "procs", "ports", "git", "recent", "pending", "execlog", "sdkhealth", "sdkprofiles", "sdksessions", "sdkts", "hooks"]));
     expect(store.alarmAt()).not.toBeNull();
     expect(store.alarmAt()).not.toBe(before);
+  });
+
+  it("rejects upgrades without a valid authentication deadline", async () => {
+    const gw = gateway();
+    const missing = new Request("http://do/live", { headers: { Upgrade: "websocket" } });
+    expect((await gw.fetch(missing)).status).toBe(401);
+    expect((await gw.fetch(liveReq(Math.floor(Date.now() / 1000)))).status).toBe(401);
+  });
+
+  it("closes an expired socket on refresh or alarm without sending sections", async () => {
+    const store = makeCtx();
+    const gw = gateway(ENV, store.ctx);
+    await get(gw, "/monitor/jobs");
+    await gw.fetch(liveReq());
+    const sock = store.sockets[0];
+    await vi.waitFor(() => expect(sock.sent).toHaveLength(16));
+    const count = nodes[0].requests.length;
+    sock.serializeAttachment(Math.floor(Date.now() / 1000));
+    sock.sent.length = 0;
+    gw.webSocketMessage(sock as unknown as WebSocket, "refresh");
+    await gw.alarm();
+    expect(sock.closed).toBe(true);
+    expect(sock.sent).toEqual([]);
+    expect(nodes[0].requests).toHaveLength(count);
   });
 
   it("on alarm with no sockets connected, does not re-arm and does not start the node", async () => {

@@ -33,15 +33,19 @@ export function clearAuthCookie(): string {
   return `${AUTH_COOKIE}=; ${ATTRS}; Max-Age=0`;
 }
 
-/** Whether the Cookie header carries a login cookie that is unexpired and signed with key. */
-export async function authCookieValid(cookieHeader: string | null, key: string, nowS: number): Promise<boolean> {
-  if (!cookieHeader || !key) return false;
+/** Validated expiry of the login cookie, in UNIX seconds. */
+export async function authCookieExpiry(cookieHeader: string | null, key: string, nowS: number): Promise<number | null> {
+  if (!cookieHeader || !key) return null;
   const pair = cookieHeader.split(";").map((p) => p.trim()).find((p) => p.startsWith(`${AUTH_COOKIE}=`));
   const value = pair?.slice(AUTH_COOKIE.length + 1) ?? "";
   const match = /^(\d{1,12})\.([0-9a-f]{64})$/.exec(value);
-  if (!match) return false;
+  if (!match) return null;
   const exp = Number(match[1]);
   // expired, or further ahead than any cookie this Worker issues
-  if (exp <= nowS || exp > nowS + AUTH_COOKIE_MAX_AGE_S) return false;
-  return sameString(await hmacHex(key, `muse-monitor-auth.${exp}`), match[2]);
+  if (exp <= nowS || exp > nowS + AUTH_COOKIE_MAX_AGE_S) return null;
+  return sameString(await hmacHex(key, `muse-monitor-auth.${exp}`), match[2]) ? exp : null;
+}
+
+export async function authCookieValid(cookieHeader: string | null, key: string, nowS: number): Promise<boolean> {
+  return (await authCookieExpiry(cookieHeader, key, nowS)) !== null;
 }

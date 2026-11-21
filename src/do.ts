@@ -15,6 +15,7 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import { AUTH_COOKIE_MAX_AGE_S } from "./auth-cookie";
 import wasmModule from "@ai-ecoverse/wasm-tailscale/main.wasm";
 // Go's wasm_exec.js defines globalThis.Go (browser path in a Worker).
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -147,6 +148,7 @@ export class MonitorGateway extends DurableObject<Env> {
   private claims: Map<string, number> | null = null;
   private flushPending: Promise<void> | null = null;
   private lastStatus = "not-started";
+  private readinessEpoch = 0;
   private lastError: string | null = null;
   private browseUrl: string | null = null;
   private peers: PeerCandidate[] = [];
@@ -529,6 +531,7 @@ export class MonitorGateway extends DurableObject<Env> {
     const callbacks: IPNCallbacks = {
       notifyState: (state: string) => {
         if (gen !== this.nodeGeneration) return;
+        if (this.lastStatus === "Running" && state !== "Running") this.readinessEpoch++;
         this.lastStatus = state;
         // REQ-SEC-044: record the transition on the in-flight attempt.
         const attempt = this.bootAttempt;
@@ -630,7 +633,18 @@ export class MonitorGateway extends DurableObject<Env> {
 
   /** Resolve (or re-resolve) the receiver's current tailnet IP. */
   private async resolveReceiver(ipn: IPN, force: boolean): Promise<string | null> {
-    return this.resolver.resolve((req) => ipn.fetch(req), this.peers, force);
+    return this.resolver.resolve((req) => {
+      if (!this.isRunning(ipn)) throw new Error("Tailscale node is not ready");
+      return ipn.fetch(req);
+    }, this.peers, force);
+  }
+
+  private isRunning(ipn: IPN, epoch = this.readinessEpoch): boolean {
+    return this.ipn === ipn && this.lastStatus === "Running" && this.readinessEpoch === epoch;
+  }
+
+  private nodeUnavailable(): Response {
+    return Response.json({ error: "tailnet_unavailable" }, { status: 502 });
   }
 
   /** GET one monitor section from the receiver through the tailnet. */
@@ -654,7 +668,10 @@ export class MonitorGateway extends DurableObject<Env> {
         { status: 502 },
       );
     }
+    const epoch = this.readinessEpoch;
+    if (!this.isRunning(ipn, epoch)) return this.nodeUnavailable();
     let ip = await this.resolveReceiverPatiently(ipn, false);
+    if (!this.isRunning(ipn, epoch)) return this.nodeUnavailable();
     if (!ip) {
       return Response.json(
         this.receiverNotFound(),
@@ -666,8 +683,10 @@ export class MonitorGateway extends DurableObject<Env> {
       resp = await this.fetchSection(ipn, ip, section, key.value);
     } catch {
       // Transport failed against the cached peer: re-resolve once.
+      if (!this.isRunning(ipn, epoch)) return this.nodeUnavailable();
       this.resolver.invalidate();
       ip = await this.resolveReceiverPatiently(ipn, true);
+      if (!this.isRunning(ipn, epoch)) return this.nodeUnavailable();
       if (!ip) {
         return Response.json(
           this.receiverNotFound(),
@@ -687,6 +706,10 @@ export class MonitorGateway extends DurableObject<Env> {
     let total = 0;
     try {
       for (;;) {
+        if (!this.isRunning(ipn, epoch)) {
+          resp.cancel();
+          return this.nodeUnavailable();
+        }
         const chunk = await resp.read();
         if (chunk === null) break;
         total += chunk.length;
@@ -705,6 +728,7 @@ export class MonitorGateway extends DurableObject<Env> {
         { status: 502 },
       );
     }
+    if (!this.isRunning(ipn, epoch)) return this.nodeUnavailable();
     const merged = new Uint8Array(total);
     let offset = 0;
     for (const c of chunks) {
@@ -723,6 +747,7 @@ export class MonitorGateway extends DurableObject<Env> {
         resp.status === 401
           ? {
               error: "receiver_unauthorized",
+              upstreamStatus: 401,
               message: `the receiver on ${RECEIVER_NAME} rejected the Bearer from ${key.source}; it must equal the receiver's TS_API_KEY`,
               keySource: key.source,
               receiver,
@@ -733,7 +758,8 @@ export class MonitorGateway extends DurableObject<Env> {
               keySource: key.source,
               receiver,
             },
-        { status: resp.status },
+        // A 401 from this API means the caller must authenticate to the Worker.
+        { status: resp.status === 401 ? 502 : resp.status },
       );
     }
     return new Response(text, {
@@ -819,10 +845,16 @@ export class MonitorGateway extends DurableObject<Env> {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return Response.json({ error: "websocket upgrade required" }, { status: 426 });
     }
+    const expires = Number(request.headers.get("X-Muse-Live-Expires"));
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isSafeInteger(expires) || expires <= now || expires > now + AUTH_COOKIE_MAX_AGE_S) {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    }
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
+    server.serializeAttachment(expires);
     void this.sweepLive();
     void this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
     return new Response(null, { status: 101, webSocket: client });
@@ -830,17 +862,31 @@ export class MonitorGateway extends DurableObject<Env> {
 
   /** Periodic sweep while clients are connected; stops when none remain. */
   async alarm(): Promise<void> {
-    if (this.ctx.getWebSockets().length === 0) return;
+    if (this.authorizedSockets().length === 0) return;
     await this.sweepLive();
-    await this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
+    if (this.authorizedSockets().length > 0) {
+      await this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
+    }
+  }
+
+  private liveSessionActive(ws: WebSocket): boolean {
+    const expires: unknown = ws.deserializeAttachment();
+    if (typeof expires === "number" && expires > Math.floor(Date.now() / 1000)) return true;
+    try { ws.close(1008, "authentication expired"); } catch { /* already closed */ }
+    return false;
+  }
+
+  private authorizedSockets(): WebSocket[] {
+    return this.ctx.getWebSockets().filter((ws) => this.liveSessionActive(ws));
   }
 
   private async sweepLive(): Promise<void> {
-    const sockets = this.ctx.getWebSockets();
+    const sockets = this.authorizedSockets();
     if (sockets.length === 0) return;
     const send = (frame: unknown) => {
       const text = JSON.stringify(frame);
       for (const ws of sockets) {
+        if (!this.liveSessionActive(ws)) continue;
         try { ws.send(text); } catch { /* a closing socket must not stop the sweep */ }
       }
     };
@@ -850,7 +896,9 @@ export class MonitorGateway extends DurableObject<Env> {
       if (!this.ipn) this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
       return;
     }
+    const epoch = this.readinessEpoch;
     for (const section of SECTIONS) {
+      if (this.lastStatus !== "Running" || this.readinessEpoch !== epoch || !sockets.some((ws) => this.liveSessionActive(ws))) return;
       let frame: Record<string, unknown>;
       try {
         const res = await this.monitor(section);
@@ -859,14 +907,14 @@ export class MonitorGateway extends DurableObject<Env> {
       } catch (err) {
         frame = { type: "section", section, status: 502, body: { error: "tailnet_unavailable", message: String(err) }, at: Date.now() };
       }
+      if (this.lastStatus !== "Running" || this.readinessEpoch !== epoch) return;
       send(frame);
     }
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
     // Clients only listen; the text "refresh" asks for an immediate sweep.
-    void ws;
-    if (typeof message === "string" && message === "refresh") void this.sweepLive();
+    if (message === "refresh" && this.liveSessionActive(ws)) void this.sweepLive();
   }
 
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
