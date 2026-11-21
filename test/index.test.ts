@@ -52,7 +52,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 36,
+      status: "ok", worker: "muse-monitor", revision: 37,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -65,7 +65,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 36, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 37, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -291,6 +291,53 @@ it("colors OK, only zero FAIL counts and exact installed-version matches", async
   expect(packages).toContain("ruby\t3.1\t3.2");
   expect(packages).toContain("local\t1.2\t未確認");
   expect(formatOutput("pkgs", "== Nix profile ==\ncurl-1.2")).toContain("最新版候補: 未確認");
+});
+
+it("filters package rows by installation status without losing version formatting", async () => {
+  const { env } = makeEnv();
+  const html = await (await worker.fetch(call("/"), env)).text();
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]
+    .split("\n  render();\n  loadLoginState();")[0];
+  const output = { innerHTML: "" };
+  const page = runInNewContext(script + "\n({ card, data, renderSectionData, setPackageFilter })", {
+    setInterval: () => {}, window: {},
+    document: {
+      getElementById: (id: string) => id === "data-pkgs" ? output : null,
+      querySelectorAll: () => [],
+      createElement: () => ({
+        set textContent(text: string) { this.innerHTML = text.replaceAll("<", "&lt;"); },
+        innerHTML: "",
+      }),
+    },
+  });
+  page.data.pkgs = [
+    "== .deb ==",
+    "パッケージ\tインストール済み\t最新版候補",
+    "curl\t1.2\t1.2",
+    "candidate\t未インストール\t2.0",
+    "available\t\t3.0",
+    "local\t1.0\t未確認",
+    "nix-local\t未確認\t未確認",
+  ].join("\n");
+  expect(page.card("pkgs")).toContain('value="all" selected');
+  expect(page.card("pkgs")).toContain("インストール済みのみ");
+  expect(page.card("jobs")).not.toContain("インストール済みのみ");
+  page.renderSectionData("pkgs");
+  expect(output.innerHTML).toContain("candidate");
+  expect(output.innerHTML).toContain("available");
+
+  page.setPackageFilter("installed");
+  expect(output.innerHTML).not.toContain("candidate");
+  expect(output.innerHTML).not.toContain("available");
+  expect(output.innerHTML).toContain('curl\t<span class="is-ok">1.2</span>');
+  expect(output.innerHTML).toContain("nix-local");
+  expect(page.card("pkgs")).toContain('value="installed" selected');
+
+  page.data.pkgs += "\nnew-candidate\t(none)\t2.1";
+  page.renderSectionData("pkgs");
+  expect(output.innerHTML).not.toContain("new-candidate");
+  page.setPackageFilter("all");
+  expect(output.innerHTML).toContain("new-candidate");
 });
 
 describe("HMAC routes", () => {
