@@ -44,7 +44,7 @@ interface Env {
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 36;
+const MONITOR_REVISION = 37;
 
 export { MonitorGateway } from "./do";
 import { AUTH_COOKIE_MAX_AGE_S, authCookieExpiry, authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -202,6 +202,12 @@ const DASHBOARD = `<!DOCTYPE html>
   let view = VIEW_MODES.includes(savedView) ? savedView : "panel";
   if (view !== savedView) saveView(view);
   let activeTab = CATS[0][0], treeSel = "status";
+  let packageFilter = "all";
+  function setPackageFilter(value) {
+    if (value !== "all" && value !== "installed") return;
+    packageFilter = value;
+    renderSectionData("pkgs");
+  }
   function key() { return document.getElementById('key').value.trim(); }
   function headers() { return key() ? { Authorization: 'Bearer ' + key() } : {}; }
   let loggedIn = false;
@@ -366,18 +372,28 @@ const DASHBOARD = `<!DOCTYPE html>
       if (/^== Nix profile ==/m.test(text) && !text.includes('パッケージ')) {
         return '最新版候補: 未確認（受信側から候補の応答なし）' + '\\n\\n' + esc(text);
       }
-      return text.split('\\n').map(line => {
+      return text.split('\\n').flatMap(line => {
         const fields = line.split('\\t');
-        if (fields.length !== 3 || fields[1] !== fields[2] || !/^[0-9]/.test(fields[1])) return esc(line);
-        return esc(fields[0]) + '\\t<span class="is-ok">' + esc(fields[1]) + '</span>\\t' + esc(fields[2]);
+        if (fields.length !== 3) return [esc(line)];
+        const installed = fields[1].trim();
+        const absent = /^(?:未インストール|未導入|なし|not installed|\\(none\\)|[-—])?$/i.test(installed);
+        if (packageFilter === 'installed' && absent) return [];
+        if (fields[1] !== fields[2] || !/^[0-9]/.test(installed)) return [esc(line)];
+        return [esc(fields[0]) + '\\t<span class="is-ok">' + esc(fields[1]) + '</span>\\t' + esc(fields[2])];
       }).join('\\n');
     }
     return esc(text).replace(/\\b(OK|FAIL([ \\t]+)0(?![\\w.]))\\b/g, (match, token, gap) =>
       gap === undefined ? '<span class="is-ok">OK</span>' : 'FAIL' + gap + '<span class="is-ok">0</span>');
   }
   function card(name) {
+    const filter = name === 'pkgs'
+      ? '<label>表示 <select onchange="setPackageFilter(this.value)">' +
+        '<option value="all"' + (packageFilter === 'all' ? ' selected' : '') + '>すべて</option>' +
+        '<option value="installed"' + (packageFilter === 'installed' ? ' selected' : '') + '>インストール済みのみ</option>' +
+        '</select></label>'
+      : '';
     return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
-      ' <button type="button" onclick="load(\\'' + name + '\\')">再取得</button></h2><pre id="data-' + name + '">' +
+      ' <button type="button" onclick="load(\\'' + name + '\\')">再取得</button></h2>' + filter + '<pre id="data-' + name + '">' +
       formatOutput(name, data[name]) + '</pre></section>';
   }
   function renderSectionData(name) {
