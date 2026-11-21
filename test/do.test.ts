@@ -798,6 +798,38 @@ describe("live WebSocket (REQ-SEC-037)", () => {
     expect(store.alarmAt()).not.toBe(before);
   });
 
+  it("coalesces a burst of refresh messages into one sweep per interval (REQ-SEC-052)", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = makeCtx({ "ts-state-epoch": 1 });
+      const gw = gateway(ENV, store.ctx);
+      await get(gw, "/monitor/jobs"); // bring the node up
+      await gw.fetch(liveReq());
+      const sock = store.sockets[0];
+      // The connect sweep runs first; flush it, then measure only refresh-driven sweeps.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sock.sent.length).toBe(16);
+      sock.sent.length = 0;
+      const before = nodes[0].requests.length;
+      // Move past the sweep interval so one refresh sweep is allowed again.
+      await vi.advanceTimersByTimeAsync(10_000);
+      gw.webSocketMessage(sock as unknown as WebSocket, "refresh");
+      gw.webSocketMessage(sock as unknown as WebSocket, "refresh");
+      gw.webSocketMessage(sock as unknown as WebSocket, "refresh");
+      await vi.advanceTimersByTimeAsync(1000);
+      // Exactly one sweep for the whole burst: 16 frames, 16 receiver fetches.
+      expect(sock.sent.length).toBe(16);
+      expect(nodes[0].requests.length - before).toBe(16);
+      // A further refresh inside the same interval starts nothing new.
+      gw.webSocketMessage(sock as unknown as WebSocket, "refresh");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sock.sent.length).toBe(16);
+      expect(nodes[0].requests.length - before).toBe(16);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects upgrades without a valid authentication deadline", async () => {
     const gw = gateway();
     const missing = new Request("http://do/live", { headers: { Upgrade: "websocket" } });
