@@ -102,6 +102,7 @@ type BootRecord = {
   login: "immediate" | "deferred" | "none" | null;
   transitions: Array<{ state: string; atMs: number }>;
   browseUrlOffered: boolean;
+  interactiveFallback?: true;
   outcome: "running" | "timeout" | "error" | "interrupted" | null;
   detail: string | null;
   reason: "epoch-reset" | "integrity" | "recovery" | null;
@@ -149,6 +150,8 @@ export class MonitorGateway extends DurableObject<Env> {
   private lastError: string | null = null;
   private browseUrl: string | null = null;
   private peers: PeerCandidate[] = [];
+  /** A public health read may continue one stalled startup, never a retry loop. */
+  private publicFallbackStarted = false;
   private probing = false;
   private resolver = new PeerResolver(RECEIVER_NAME, RECEIVER_PORT);
 
@@ -294,7 +297,7 @@ export class MonitorGateway extends DurableObject<Env> {
    * except that /node-check awaits this initiation itself so the drive is
    * never deferred past its response.
    */
-  private async initiateCheck(): Promise<void> {
+  private async initiateCheck(publicFallback = false): Promise<void> {
     if (this.lastStatus === "Running" || this.attemptOpen()) return;
     if (!this.ipn) {
       await this.ensureNode().catch((err) => {
@@ -302,16 +305,18 @@ export class MonitorGateway extends DurableObject<Env> {
       });
       return;
     }
-    // 鍵を付けた前の試行が URL も Running も無く閉じた(鍵が受け付けられない)なら、鍵を付けずに login() を呼び、
-    // 対話のログイン URL を出させる(2026-11-18 本番で、鍵付きの再駆動が毎回 URL 無しで時間切れになった)。
-    const previous = (await this.loadBootLog()).filter((r) => r.kind === "start").at(-1);
-    const keyRejected = Boolean(this.authKey()) && previous !== undefined && previous.outcome !== null
-      && previous.outcome !== "running" && !previous.browseUrlOffered;
+    const auth = await this.joinAuth(!publicFallback);
+    if ((this.lastStatus as string) === "Running" || this.attemptOpen()) return;
+    if (publicFallback) {
+      if (auth || this.publicFallbackStarted) return;
+      this.publicFallbackStarted = true;
+    }
     const record: BootRecord = {
       kind: "start",
       startedAt: new Date().toISOString(),
       origin: "persisted",
       login: "deferred",
+      ...(!auth && this.authKey() ? { interactiveFallback: true } : {}),
       transitions: [],
       browseUrlOffered: false,
       outcome: null,
@@ -322,12 +327,27 @@ export class MonitorGateway extends DurableObject<Env> {
     this.browseUrl = null;
     await this.appendBoot(record);
     try {
-      this.ipn.login(keyRejected ? undefined : this.authKey()?.value);
+      this.ipn.login(auth?.value);
     } catch (err) {
       this.closeBootAttempt(err);
       return;
     }
     this.ctx.waitUntil(this.settleAttempt());
+  }
+
+  /** Reuse the last boot outcome even when the DO was recreated between requests. */
+  private async joinAuth(renewInteractiveLink = false) {
+    const auth = this.authKey();
+    if (!auth) return null;
+    const previous = (await this.loadBootLog()).filter((record) => record.kind === "start").at(-1);
+    const expiredLink = renewInteractiveLink && previous?.interactiveFallback
+      && previous.outcome === "timeout" && previous.browseUrlOffered;
+    return this.loginStalled(previous) || expiredLink ? null : auth;
+  }
+
+  private loginStalled(record: BootRecord | undefined): boolean {
+    return record?.outcome === "timeout" && !record.browseUrlOffered
+      && (record.transitions.at(-1)?.state === "NeedsLogin" || record.detail?.includes("state: NeedsLogin") === true);
   }
 
   /** Close the re-driven attempt when its wait ends without Running. */
@@ -471,17 +491,20 @@ export class MonitorGateway extends DurableObject<Env> {
       detail: null,
       reason: null,
     };
+    const auth = await this.joinAuth();
+    if (!auth && this.authKey()) {
+      record.interactiveFallback = true;
+      this.publicFallbackStarted = true;
+    }
     this.bootAttempt = { record, startedMs: Date.now(), gen };
     await this.appendBoot(record);
-
-    const auth = hasState ? null : this.authKey();
     let ipn: IPN;
     try {
       const go = new Go();
       const instance = await WebAssembly.instantiate(wasmModule, go.importObject);
       void go.run(instance);
       const created = newIPN({
-        ...(auth ? { authKey: auth.value } : {}),
+        ...(!hasState && auth ? { authKey: auth.value } : {}),
         hostname: NODE_HOSTNAME,
         ephemeral: false,
         logUpload: false,
@@ -525,7 +548,7 @@ export class MonitorGateway extends DurableObject<Env> {
             attempt.record.login = "deferred";
             void this.saveBootLog();
           }
-          ipn.login(this.authKey()?.value);
+          ipn.login(auth?.value);
         }
         if (state !== "Running") return;
         this.pendingPanic = null;
@@ -862,6 +885,10 @@ export class MonitorGateway extends DurableObject<Env> {
   async publicStatus(): Promise<Response> {
     // 鍵なしでも状態を確かめられるよう、ノードが無ければ起動を始める(待たない。起動は1回にまとめられる)。
     if (!this.ipn) this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+    else if (this.lastStatus === "NeedsLogin" && this.authKey() && !this.publicFallbackStarted
+      && this.loginStalled(this.bootAttempt?.record)) {
+      this.ctx.waitUntil(this.initiateCheck(true));
+    }
     // ノードは動いているのに受信側が決まっていなければ、到達確認を裏で走らせる(結果は receiverProbes に出る)。
     else if (this.lastStatus === "Running" && !this.resolver.cachedIp && !this.probing) {
       const ipn = this.ipn;

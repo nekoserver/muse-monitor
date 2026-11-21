@@ -44,7 +44,7 @@ interface Env {
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 27;
+const MONITOR_REVISION = 30;
 
 export { MonitorGateway } from "./do";
 import { authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -316,6 +316,7 @@ const DASHBOARD = `<!DOCTYPE html>
   function loadAll() { loadLoginState(); loadStatus(); for (const [name] of SECTIONS) load(name); }
   // ログイン状態と IP は30秒ごとに取り直し、修復による変化を画面に映す(REQ-SEC-043)。
   setInterval(loadLoginState, 30000);
+  setInterval(() => { if (loggedIn) loadStatus(); }, 5000);
   function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
   function card(name) {
     return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
