@@ -529,6 +529,35 @@ describe("GET /public-status (for /health, no secrets)", () => {
     expect(text).not.toContain("login.tailscale.com");
   });
 
+  it("does not restart the node from the keyless route within 5 minutes of a failed attempt, and does after (REQ-SEC-050)", async () => {
+    vi.useFakeTimers();
+    try {
+      onLogin = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
+      const store = makeCtx();
+      const gw = gateway(ENV, store.ctx);
+      await get(gw, "/public-status"); // the keyless read starts the node in the background
+      await vi.advanceTimersByTimeAsync(60_000); // the start times out; the attempt closes
+      await Promise.all(store.waits);
+      expect(nodes).toHaveLength(1);
+      // A fresh DO instance (after eviction) reading the keyless route must
+      // not start the node again yet — the cooldown rides on the persisted log.
+      const store2 = makeCtx({ "ts-boot-log": store.stored.get("ts-boot-log") });
+      const next = gateway(ENV, store2.ctx);
+      const res = await get(next, "/public-status");
+      expect(res.status).toBe(200);
+      await Promise.all(store2.waits);
+      expect(nodes).toHaveLength(1);
+      // Once 5 minutes have passed since the failed attempt closed, the
+      // keyless route may start the node again.
+      await vi.advanceTimersByTimeAsync(300_000);
+      await get(next, "/public-status");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(nodes).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows the failure reason as a sanitized summary: no URLs, IPs or key values (REQ-SEC-031)", async () => {
     onLogin = (node) => queueMicrotask(() => node.callbacks!.notifyPanicRecover("Tailscale could not start: Get https://login.tailscale.com/a/xyz via 100.86.29.77 with tskey-auth-secret / receiver-key-secret"));
     const gw = gateway();

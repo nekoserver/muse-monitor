@@ -105,6 +105,8 @@ type BootRecord = {
   browseUrlOffered: boolean;
   interactiveFallback?: true;
   outcome: "running" | "timeout" | "error" | "interrupted" | null;
+  /** When the attempt closed (ISO 8601); set only for timeout/error closes (REQ-SEC-050). */
+  closedAt?: string | null;
   detail: string | null;
   reason: "epoch-reset" | "integrity" | "recovery" | null;
 };
@@ -120,6 +122,8 @@ const SECTIONS = new Set([
 ]);
 /** Live page sweep interval while at least one WebSocket client is connected (REQ-SEC-037). */
 const LIVE_INTERVAL_MS = 10_000;
+/** After a start attempt closes with a timeout or an error, the keyless route must not start another attempt for this long (REQ-SEC-050). */
+const START_COOLDOWN_MS = 300_000;
 
 /** How many extra probes, and how far apart, before answering receiver_not_found. */
 export const RECEIVER_RETRIES = 2;
@@ -376,8 +380,24 @@ export class MonitorGateway extends DurableObject<Env> {
     const attempt = this.bootAttempt;
     if (!attempt || attempt.record.outcome !== null) return;
     attempt.record.outcome = (err as { bootTimeout?: boolean } | null)?.bootTimeout ? "timeout" : "error";
+    attempt.record.closedAt = new Date().toISOString();
     attempt.record.detail = this.sanitizeForPublic(err instanceof Error ? err.message : String(err), 200);
     void this.saveBootLog();
+  }
+
+  /**
+   * REQ-SEC-050 cooldown: true while the last start attempt that closed with
+   * a timeout or an error is younger than START_COOLDOWN_MS. The boot log is
+   * persisted, so the cooldown survives DO recreation — the case that made
+   * keyless reads restart a failing node over and over. Attempts closed
+   * before closedAt was recorded carry no timestamp and never cool down.
+   */
+  private async startCooldownActive(): Promise<boolean> {
+    const log = await this.loadBootLog();
+    const last = log.filter((r) => r.kind === "start" && (r.outcome === "timeout" || r.outcome === "error")).at(-1);
+    if (!last?.closedAt) return false;
+    const closedMs = Date.parse(last.closedAt);
+    return Number.isFinite(closedMs) && Date.now() - closedMs < START_COOLDOWN_MS;
   }
 
   /**
@@ -954,7 +974,13 @@ export class MonitorGateway extends DurableObject<Env> {
    */
   async publicStatus(): Promise<Response> {
     // 鍵なしでも状態を確かめられるよう、ノードが無ければ起動を始める(待たない。起動は1回にまとめられる)。
-    if (!this.ipn) this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+    // ただし REQ-SEC-050: 直近の試行が時間切れ・エラーで終わった後5分間は、鍵なし経路からは再起動しない
+    // (応答は最後に分かった状態のまま返す)。REQ-SEC-058 の対話フォールバックは版21の例外として対象外。
+    if (!this.ipn) {
+      if (!(await this.startCooldownActive())) {
+        this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+      }
+    }
     else if (this.lastStatus === "NeedsLogin" && this.authKey() && !this.publicFallbackStarted
       && this.loginStalled(this.bootAttempt?.record)) {
       this.ctx.waitUntil(this.initiateCheck(true));
