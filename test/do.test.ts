@@ -1002,6 +1002,50 @@ describe("node check on /status and /node-check (SPEC v20, REQ-SEC-053..056)", (
       return gw;
     }
 
+    it("offers interactive login on the first persisted boot after a recorded NeedsLogin timeout", async () => {
+      vi.useFakeTimers();
+      const persisted = { "_current-profile": "profile-1", "profile-1": "{}" };
+      const store = makeCtx({
+        "ts-state": persisted,
+        "ts-state-epoch": 1,
+        "ts-boot-log": [{
+          kind: "start", origin: "persisted", login: "deferred", outcome: "timeout",
+          transitions: [{ state: "NoState", atMs: 0 }, { state: "NeedsLogin", atMs: 0 }],
+          browseUrlOffered: false,
+          detail: "tailscale node did not reach Running in 60s (state: NeedsLogin, auth key from: TS_AUTHKEY)",
+        }],
+      });
+      onStart = (node) => queueMicrotask(() => node.callbacks!.notifyState("NeedsLogin"));
+      onLogin = (node, authKey) => queueMicrotask(() => {
+        if (!authKey) node.callbacks!.notifyBrowseToURL(KEYLESS_URL);
+      });
+      const gw = gateway(ENV, store.ctx);
+
+      await get(gw, "/public-status");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nodes[0].login).toHaveBeenCalledExactlyOnceWith(undefined);
+      expect((await (await get(gw, "/status")).json()).loginUrl).toBe(KEYLESS_URL);
+      const publicStatus = await (await get(gw, "/public-status")).text();
+      expect(JSON.parse(publicStatus).loginPending).toBe(true);
+      expect(publicStatus).not.toContain(KEYLESS_URL);
+      expect(store.stored.get("ts-state")).toEqual(persisted);
+    });
+
+    it("continues a stalled public startup once without exposing the approval link", async () => {
+      const gw = await keyRejected();
+      await Promise.all([get(gw, "/public-status"), get(gw, "/public-status")]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nodes[0].login).toHaveBeenCalledTimes(2);
+      expect(nodes[0].login).toHaveBeenLastCalledWith(undefined);
+      const publicStatus = await (await get(gw, "/public-status")).text();
+      expect(JSON.parse(publicStatus).loginPending).toBe(true);
+      expect(publicStatus).not.toContain(KEYLESS_URL);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await get(gw, "/public-status");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(nodes[0].login).toHaveBeenCalledTimes(2);
+    });
+
     it("POST /node-check re-drives WITHOUT the key, so a login URL is offered and shown", async () => {
       const gw = await keyRejected();
       expect(nodes[0].login).toHaveBeenLastCalledWith("tskey-auth-secret");
@@ -1014,6 +1058,34 @@ describe("node check on /status and /node-check (SPEC v20, REQ-SEC-053..056)", (
       expect(st.loginUrl).toBe(KEYLESS_URL);
       const records = (st.bootLog as Array<Record<string, unknown>>).filter((r) => r.kind === "start");
       expect(records.at(-1)).toMatchObject({ origin: "persisted", browseUrlOffered: true, outcome: null });
+    });
+
+    it("keeps the node identity and reads the receiver after interactive approval", async () => {
+      const gw = await keyRejected();
+      await gw.fetch(new Request("http://do/node-check", { method: "POST" }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await (await get(gw, "/status")).json()).loginUrl).toBe(KEYLESS_URL);
+      expect(nodes[0].requests).toEqual([]);
+
+      nodes[0].up();
+      expect(await (await get(gw, "/monitor/jobs")).json()).toEqual({ output: "jobs ok" });
+      expect(nodes).toHaveLength(1);
+      expect((await (await get(gw, "/status")).json()).loginUrl).toBeNull();
+      expect(await (await get(gw, "/public-status")).json()).toMatchObject({
+        node: "Running", receiverResolved: true, loginPending: false,
+      });
+    });
+
+    it("renews an expired interactive link on the next authenticated node check", async () => {
+      const gw = await keyRejected();
+      await gw.fetch(new Request("http://do/node-check", { method: "POST" }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      await gw.fetch(new Request("http://do/node-check", { method: "POST" }));
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(nodes[0].login).toHaveBeenCalledTimes(3);
+      expect(nodes[0].login).toHaveBeenLastCalledWith(undefined);
+      expect((await (await get(gw, "/status")).json()).loginUrl).toBe(KEYLESS_URL);
     });
 
     it("keeps using the key while the previous attempt did offer a URL (the key path is not dropped needlessly)", async () => {
