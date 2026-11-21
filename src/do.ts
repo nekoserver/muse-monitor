@@ -95,6 +95,16 @@ function stateIsIntact(stored: unknown): boolean {
  */
 const BOOT_LOG_KEY = "ts-boot-log";
 const BOOT_LOG_MAX = 50;
+const SAMPLES_KEY = "ts-samples";
+const SAMPLE_NEXT_KEY = "ts-sample-next";
+/** Hourly node-state samples kept for the health chart: 7 days (REQ-SEC-046). */
+const SAMPLES_MAX = 168;
+const SAMPLE_INTERVAL_MS = 3_600_000;
+
+/** The next hourly sample time strictly after `now` (ms), aligned to the wall-clock hour. */
+function nextSampleTime(now: number): number {
+  return (Math.floor(now / SAMPLE_INTERVAL_MS) + 1) * SAMPLE_INTERVAL_MS;
+}
 
 type BootRecord = {
   kind: "start" | "state_discarded";
@@ -107,6 +117,14 @@ type BootRecord = {
   outcome: "running" | "timeout" | "error" | "interrupted" | null;
   detail: string | null;
   reason: "epoch-reset" | "integrity" | "recovery" | null;
+};
+
+/** One hourly node-state sample for the health chart (REQ-SEC-046). No secrets, no login URLs. */
+type NodeSample = {
+  at: string;
+  node: string;
+  lastOutcome: BootRecord["outcome"];
+  ip: string | null;
 };
 
 const CLAIMS_KEY = "hmac-claims";
@@ -137,6 +155,8 @@ export class MonitorGateway extends DurableObject<Env> {
   private stateLoaded = false;
   /** Boot log mirror (REQ-SEC-044); null until first loaded from storage. */
   private bootLog: BootRecord[] | null = null;
+  private samples: NodeSample[] | null = null;
+  private sampleNext: number | null = null;
   /** The in-flight start attempt being recorded, with its generation. */
   private bootAttempt: { record: BootRecord; startedMs: number; gen: number } | null = null;
   /** Whether the current node was started from persisted state, and whether the one state-discarding recovery has been used. */
@@ -602,7 +622,10 @@ export class MonitorGateway extends DurableObject<Env> {
   /** Durable Object entrypoint: /status, /monitor/<section>, /hmac-claim. */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // F11 self-repair: ordinary requests keep the hourly sample alarm armed.
+    this.ctx.waitUntil(this.ensureSampleArmed());
     if (url.pathname === "/status") return this.status();
+    if (url.pathname === "/history") return this.history();
     if (url.pathname === "/node-check") {
       if (request.method !== "POST") return Response.json({ error: "not found" }, { status: 404 });
       // REQ-SEC-056: the manual check drives first, then answers with the
@@ -882,13 +905,122 @@ export class MonitorGateway extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  /** Periodic sweep while clients are connected; stops when none remain. */
+  /**
+   * One alarm chain drives two schedules: the live sweep (10 s, only while
+   * clients are connected) and the hourly node-state sample (REQ-SEC-046,
+   * whether or not anyone is connected). The alarm is always re-armed at
+   * whichever comes first, so the sample chain survives on its own.
+   */
   async alarm(): Promise<void> {
-    if (this.authorizedSockets().length === 0) return;
-    await this.sweepLive();
-    if (this.authorizedSockets().length > 0) {
-      await this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
+    const now = Date.now();
+    let nextAlarm = Number.POSITIVE_INFINITY;
+    const sampleAt = await this.sampleNextAt();
+    if (now >= sampleAt) {
+      await this.takeSample().catch(() => { /* a failed sample must not break the sweep or the chain */ });
+      const next = nextSampleTime(now);
+      this.sampleNext = next;
+      try { await this.ctx.storage.put(SAMPLE_NEXT_KEY, next); } catch { /* retried on the next request */ }
+      nextAlarm = next;
+    } else {
+      nextAlarm = sampleAt;
     }
+    if (this.authorizedSockets().length > 0) {
+      await this.sweepLive();
+      if (this.authorizedSockets().length > 0) {
+        nextAlarm = Math.min(nextAlarm, Date.now() + LIVE_INTERVAL_MS);
+      }
+    }
+    if (Number.isFinite(nextAlarm)) {
+      await this.ctx.storage.setAlarm(nextAlarm);
+    }
+  }
+
+  /** Load the hourly samples once per instance (REQ-SEC-046). A broken store reads as empty. */
+  private async loadSamples(): Promise<NodeSample[]> {
+    if (this.samples) return this.samples;
+    let samples: NodeSample[] = [];
+    try {
+      const stored = await this.ctx.storage.get<NodeSample[]>(SAMPLES_KEY);
+      if (Array.isArray(stored)) samples = stored;
+    } catch {
+      // The samples are evidence, like the boot log: never block on them.
+    }
+    this.samples = samples.slice(-SAMPLES_MAX);
+    return this.samples;
+  }
+
+  /** Persist the samples. Failures are swallowed, as with the boot log. */
+  private async saveSamples(): Promise<void> {
+    if (!this.samples) return;
+    try {
+      await this.ctx.storage.put(SAMPLES_KEY, this.samples);
+    } catch {
+      // See loadSamples.
+    }
+  }
+
+  /** The next sample time (ms): the persisted schedule, or the next hour boundary when none exists yet. */
+  private async sampleNextAt(): Promise<number> {
+    if (this.sampleNext !== null) return this.sampleNext;
+    let next: number | null = null;
+    try {
+      const stored = await this.ctx.storage.get<number>(SAMPLE_NEXT_KEY);
+      if (typeof stored === "number" && Number.isFinite(stored)) next = stored;
+    } catch {
+      // Fall through to the computed default.
+    }
+    if (next === null) {
+      next = nextSampleTime(Date.now());
+      try { await this.ctx.storage.put(SAMPLE_NEXT_KEY, next); } catch { /* arming retries on the next request */ }
+    }
+    this.sampleNext = next;
+    return next;
+  }
+
+  /** Keep the sample alarm armed (F11): pull the alarm in when it is missing or later than the sample time. */
+  private async ensureSampleArmed(): Promise<void> {
+    try {
+      const next = await this.sampleNextAt();
+      const current = await this.ctx.storage.getAlarm();
+      if (current === null || current > next) await this.ctx.storage.setAlarm(next);
+    } catch {
+      // Arming must never break a request.
+    }
+  }
+
+  /**
+   * Record one hourly sample (REQ-SEC-046): the node's state, the last start
+   * attempt's outcome and the node's own IP. When the node has not been
+   * started, start it in the background exactly as the read paths do.
+   * Sampling never discards persisted state, and a recording failure is
+   * contained by the caller (alarm).
+   */
+  private async takeSample(): Promise<void> {
+    const log = await this.loadBootLog();
+    const lastStart = log.filter((r) => r.kind === "start").at(-1);
+    const samples = await this.loadSamples();
+    samples.push({
+      at: new Date().toISOString(),
+      node: this.ipn ? this.lastStatus : "not-started",
+      lastOutcome: lastStart?.outcome ?? null,
+      ip: candidatesFor(this.peers, NODE_HOSTNAME)[0]?.ip ?? null,
+    });
+    while (samples.length > SAMPLES_MAX) samples.shift();
+    await this.saveSamples();
+    if (!this.ipn) {
+      this.ctx.waitUntil(this.ensureNode().catch((err) => { this.lastError = `node start failed: ${String(err).slice(0, 200)}`; }));
+    }
+  }
+
+  /**
+   * Chart data for /health-history (REQ-SEC-049): the samples and the boot
+   * records, read-only — reading it starts nothing and fetches no section
+   * (REQ-SEC-051). The records carry no login URL or key values (REQ-SEC-044).
+   */
+  private async history(): Promise<Response> {
+    const samples = await this.loadSamples();
+    const log = await this.loadBootLog();
+    return Response.json({ samples, bootLog: log.slice(-BOOT_LOG_MAX) });
   }
 
   private liveSessionActive(ws: WebSocket): boolean {

@@ -42,9 +42,10 @@ interface Env {
  * 10: 永続化された状態がある場合は login を呼ばず状態から復帰する(参加は一度だけ。鍵の変更で参加済みノードを壊さない)。
  * 23: 未認証時のグレーアウトに彩度落としを追加(REQ-SEC-041)。ログイン待ちの間、認証済み表示に Tailscale ログインへのリンクを出す(REQ-SEC-042)。
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
+ * 40: ノード状態を1時間ごとにサンプルとして記録し(REQ-SEC-046)、/health-history で鍵なしに読み出してダッシュボード最上部にチャートを出す(REQ-SEC-049)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 39;
+const MONITOR_REVISION = 40;
 
 export { MonitorGateway } from "./do";
 import { AUTH_COOKIE_MAX_AGE_S, authCookieExpiry, authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -170,6 +171,8 @@ const DASHBOARD = `<!DOCTYPE html>
 <h1>muse-monitor <span class="meta">読み取り専用モニタ（muse-vm）</span></h1>
 <p id="loginstat" class="login-ng">ノードのログイン状態: 未ログイン（未取得）</p>
 <p id="bootlog" class="meta">直近の起動: 未取得</p>
+<div id="healthchart" class="meta">ヘルスチェック履歴: 未取得</div>
+<div id="healthchart-detail" class="meta"></div>
 <p><a id="loginlink" href="#" target="_blank" rel="noopener" style="display:none">Tailscale ログインを承認する</a>
 <button type="button" id="nodecheck" onclick="nodeCheck()">ノード再確認</button></p>
 <p id="authstat" class="login-ng">このブラウザのキー認証: 未認証</p>
@@ -313,6 +316,43 @@ const DASHBOARD = `<!DOCTYPE html>
         ' / 受信側: ' + (rcv.baseName ?? '-') + ' -> ' + (rcv.resolvedIp ?? '未解決') +
         ' / 候補: ' + ((rcv.candidates || []).map(c => c.name + '(' + c.ip + ')').join(', ') || 'なし');
     } catch (err) { el.textContent = 'ノード状態: 取得失敗 ' + err; }
+  }
+  async function loadHealthChart() {
+    // 時間ごとのヘルスチェック履歴(REQ-SEC-049)。データは鍵なしの
+    // /health-history から取る。点を選ぶと、その時間帯のサンプルと
+    // 起動記録(異常の検知と復旧の記録を含む)を下に表示する。
+    const el = document.getElementById('healthchart');
+    const det = document.getElementById('healthchart-detail');
+    if (!el || !det) return;
+    try {
+      const r = await fetch('/health-history');
+      if (!r.ok) throw new Error('history HTTP ' + r.status);
+      const j = await r.json();
+      const samples = j.samples || [];
+      const logs = j.bootLog || [];
+      if (!samples.length) { el.textContent = 'ヘルスチェック履歴: まだサンプルがありません（1時間ごとに記録されます）'; return; }
+      el.textContent = 'ヘルスチェック履歴（時間ごと、直近' + samples.length + '件）: ';
+      for (const s of samples) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = (s.at || '').slice(11, 16);
+        b.title = s.at + ' 状態: ' + s.node;
+        b.style.color = s.node === 'Running' ? '#9c9' : '#e99';
+        b.onclick = () => {
+          const at = new Date(s.at).getTime();
+          const rel = logs.filter(x => { const t = new Date(x.startedAt).getTime(); return t > at - 3600000 && t <= at; });
+          let text = 'サンプル: ' + s.at + ' / 状態: ' + s.node + ' / 直近の試行結果: ' + (s.lastOutcome ?? 'なし') + ' / IP: ' + (s.ip ?? '未割当');
+          if (rel.length) {
+            text += '\\nこの時間帯の起動記録:';
+            for (const x of rel) text += '\\n- ' + x.startedAt + ' ' + x.kind + ' 結果: ' + (x.outcome ?? '進行中') + (x.detail ? ' / ' + x.detail : '');
+          } else {
+            text += '\\nこの時間帯の起動記録はありません';
+          }
+          det.textContent = text;
+        };
+        el.appendChild(b);
+      }
+    } catch (err) { el.textContent = 'ヘルスチェック履歴: 取得失敗 ' + err; }
   }
   async function loadLoginState() {
     // ノードのログイン状態は鍵なしの /health から取る(REQ-SEC-034)。
@@ -503,6 +543,7 @@ const DASHBOARD = `<!DOCTYPE html>
   }
   render();
   loadLoginState();
+  loadHealthChart();
   probeLogin();
   loadStatus();  // 7日間の Cookie が残っていれば、キーを入れずに状態が出る
   window.addEventListener('scroll', updatePanelSection, { passive: true });
@@ -597,6 +638,17 @@ export default {
         version: meta ? { id: meta.id, tag: meta.tag, timestamp: meta.timestamp } : null,
         node,
       });
+    }
+
+    if (url.pathname === "/health-history" && request.method === "GET") {
+      // チャート用データ(REQ-SEC-049)。/health と同格に鍵なしで読み取り専用に出す。
+      // ログイン URL と鍵の値は DO 側の記録にそもそも含まれない(REQ-SEC-044)。
+      try {
+        const stub = env.MONITOR_GATEWAY.get(env.MONITOR_GATEWAY.idFromName("monitor-gateway"));
+        return await stub.fetch("http://do/history");
+      } catch (err) {
+        return Response.json({ samples: [], bootLog: [], error: `history unavailable: ${String(err).slice(0, 200)}` });
+      }
     }
 
     if (url.pathname === "/" && request.method === "GET") {
