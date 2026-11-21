@@ -178,6 +178,17 @@ export class MonitorGateway extends DurableObject<Env> {
     return this.authKey()?.source ?? null;
   }
 
+  private receiverFpCache: { value: string; fp: string } | null = null;
+
+  /** SPEC v21 REQ-SEC-060: a key fingerprint is the first 8 hex chars of the value's SHA-256. */
+  private async keyFingerprint(value: string): Promise<string> {
+    if (this.receiverFpCache?.value === value) return this.receiverFpCache.fp;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    const fp = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 8);
+    this.receiverFpCache = { value, fp };
+    return fp;
+  }
+
   private receiverKey(): { value: string; source: "TS_API_KEY" } | null {
     return this.env.TS_API_KEY ? { value: this.env.TS_API_KEY, source: "TS_API_KEY" } : null;
   }
@@ -743,13 +754,24 @@ export class MonitorGateway extends DurableObject<Env> {
       } catch {
         // keep the raw text
       }
+      // SPEC v21 REQ-SEC-061: a receiver 401 names both fingerprints so the
+      // mismatch is diagnosable from this one response, and states the
+      // canonical side. The expected fingerprint comes from the receiver's
+      // own body; an older receiver sends none, which reads as null.
+      const expectedKeyFingerprint =
+        resp.status === 401 && receiver && typeof receiver === "object" &&
+        typeof (receiver as { expectedKeyFingerprint?: unknown }).expectedKeyFingerprint === "string"
+          ? (receiver as { expectedKeyFingerprint: string }).expectedKeyFingerprint
+          : null;
       return Response.json(
         resp.status === 401
           ? {
               error: "receiver_unauthorized",
               upstreamStatus: 401,
-              message: `the receiver on ${RECEIVER_NAME} rejected the Bearer from ${key.source}; it must equal the receiver's TS_API_KEY`,
+              message: `the receiver on ${RECEIVER_NAME} rejected the Bearer from ${key.source}; the receiver's key is canonical — align the Worker secret TS_API_KEY to the receiver's value`,
               keySource: key.source,
+              presentedKeyFingerprint: await this.keyFingerprint(key.value),
+              expectedKeyFingerprint,
               receiver,
             }
           : {
@@ -996,6 +1018,10 @@ export class MonitorGateway extends DurableObject<Env> {
     // REQ-SEC-055: the login URL is shown only while the attempt that
     // produced it is open; a closed attempt's URL is never offered again.
     const loginUrl = this.attemptOpen() ? this.browseUrl : null;
+    // SPEC v21 REQ-SEC-060: the presented receiver key's fingerprint appears
+    // on the authenticated status only; the public status never carries it.
+    const rk = this.receiverKey();
+    const receiverKeyFingerprint = rk ? await this.keyFingerprint(rk.value) : null;
     if (!this.ipn) {
       return Response.json({
         node: "not-started",
@@ -1004,6 +1030,7 @@ export class MonitorGateway extends DurableObject<Env> {
         loginUrl,
         authKeyConfigured: Boolean(this.authKey()),
         authKeySource: this.authKeySource(),
+        receiverKeyFingerprint,
         bootLog: (await this.loadBootLog()).slice(-20),
       });
     }
@@ -1022,6 +1049,7 @@ export class MonitorGateway extends DurableObject<Env> {
       loginUrl,
       authKeyConfigured: Boolean(this.authKey()),
         authKeySource: this.authKeySource(),
+      receiverKeyFingerprint,
       bootLog: (await this.loadBootLog()).slice(-20),
       receiver: {
         baseName: RECEIVER_NAME,

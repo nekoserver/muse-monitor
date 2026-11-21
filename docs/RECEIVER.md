@@ -16,7 +16,9 @@ GET /monitor/<section>
   ピア（`muse-vm`、`muse-vm-1`、…）から候補を挙げ、`/health` への
   到達で判定する。IP の固定指定はしない
 - 認証: `Authorization: Bearer <TS_API_KEY>` 必須。
-  未設定・不一致は 401、受信側に鍵が未設定なら 503
+  未設定・不一致は 401、受信側に鍵が未設定なら 503（エラー名は `receiver_key_not_configured` に統一する。SPEC REQ-SEC-062）
+- 鍵の正: 受信側の `~/.config/muse-receiver.env`。Worker のシークレットは写しであり、食い違った場合は受信側に合わせる（SPEC REQ-SEC-059）
+- 指紋: 受信側は `/health` に `keyFingerprint`（鍵の SHA-256 の先頭8文字。未設定なら null）を返し、401 の本文に `expectedKeyFingerprint` と `presentedKeyFingerprint` を含める。Worker は自ら提示した鍵の指紋を認証済み `/api/status` の `receiverKeyFingerprint` に出し、`receiver_unauthorized` の本文に両指紋を含める（SPEC REQ-SEC-060・061）
 
 ## レスポンス
 
