@@ -149,6 +149,10 @@ export class MonitorGateway extends DurableObject<Env> {
   private flushPending: Promise<void> | null = null;
   private lastStatus = "not-started";
   private readinessEpoch = 0;
+  /** When the last live sweep started (ms); refresh-driven sweeps are gated on it (REQ-SEC-052). */
+  private lastSweepAt = 0;
+  /** True while a live sweep is running; no second sweep starts concurrently (REQ-SEC-052). */
+  private sweepInFlight = false;
   private lastError: string | null = null;
   private browseUrl: string | null = null;
   private peers: PeerCandidate[] = [];
@@ -877,7 +881,7 @@ export class MonitorGateway extends DurableObject<Env> {
     const server = pair[1];
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment(expires);
-    void this.sweepLive();
+    this.beginSweep(false);
     void this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -885,10 +889,28 @@ export class MonitorGateway extends DurableObject<Env> {
   /** Periodic sweep while clients are connected; stops when none remain. */
   async alarm(): Promise<void> {
     if (this.authorizedSockets().length === 0) return;
-    await this.sweepLive();
+    const sweeping = this.beginSweep(false);
+    if (sweeping) await sweeping;
     if (this.authorizedSockets().length > 0) {
       await this.ctx.storage.setAlarm(Date.now() + LIVE_INTERVAL_MS);
     }
+  }
+
+  /**
+   * Start a live sweep, coalesced per REQ-SEC-052: never two at once, and a
+   * refresh-driven sweep starts at most once per LIVE_INTERVAL_MS (measured
+   * from the last sweep's start, whatever triggered it). The connect and
+   * alarm paths are the interval's own drivers, so they are gated only on a
+   * sweep already in flight. Returns the sweep's promise, or null when no
+   * sweep was started.
+   */
+  private beginSweep(fromRefresh: boolean): Promise<void> | null {
+    const now = Date.now();
+    if (this.sweepInFlight) return null;
+    if (fromRefresh && now - this.lastSweepAt < LIVE_INTERVAL_MS) return null;
+    this.sweepInFlight = true;
+    this.lastSweepAt = now;
+    return this.sweepLive().finally(() => { this.sweepInFlight = false; });
   }
 
   private liveSessionActive(ws: WebSocket): boolean {
@@ -935,8 +957,9 @@ export class MonitorGateway extends DurableObject<Env> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    // Clients only listen; the text "refresh" asks for an immediate sweep.
-    if (message === "refresh" && this.liveSessionActive(ws)) void this.sweepLive();
+    // Clients only listen; the text "refresh" asks for an immediate sweep,
+    // coalesced to at most one sweep per interval (REQ-SEC-052).
+    if (message === "refresh" && this.liveSessionActive(ws)) this.beginSweep(true);
   }
 
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
