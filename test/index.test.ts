@@ -52,7 +52,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 37,
+      status: "ok", worker: "muse-monitor", revision: 38,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -65,7 +65,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 37, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 38, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -267,7 +267,7 @@ describe("dashboard layout", () => {
   });
 });
 
-it("colors OK, only zero FAIL counts and exact installed-version matches", async () => {
+it("colors disk thresholds, OK, zero FAIL counts and exact installed-version matches", async () => {
   const { env } = makeEnv();
   const html = await (await worker.fetch(call("/"), env)).text();
   const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]
@@ -281,6 +281,23 @@ it("colors OK, only zero FAIL counts and exact installed-version matches", async
       }),
     },
   });
+  const disks = [
+    "Filesystem        Size  Used Avail Use% Mounted on",
+    "overlay           100G   50G   50G  50% /",
+    "/dev/mapper/rv    100G   51G   49G  51% /home",
+    "overlay           100G   79G   21G  79% /tmp",
+    "/dev/mapper/rv    100G   80G   20G  80% /work",
+    "/dev/mapper/rv2   100G   90G   10G  90% /other",
+    "overlay           100G   90G   10G  90% /<script>",
+  ].join("\n");
+  const vm = formatOutput("vm", disks);
+  expect(vm).toContain('<span class="is-ok">50</span>% /');
+  expect(vm).toContain('<span class="is-warn">51</span>% /home');
+  expect(vm).toContain('<span class="is-warn">79</span>% /tmp');
+  expect(vm).toContain('<span class="is-fail">80</span>% /work');
+  expect(vm).toContain("/dev/mapper/rv2   100G   90G   10G  90% /other");
+  expect(vm).toContain('<span class="is-fail">90</span>% /&lt;script&gt;');
+  expect(formatOutput("status", disks)).not.toContain('class="is-fail"');
   const diag = formatOutput("diag", "OK test / FAIL 0 / FAIL 1\n<script>");
   expect(diag).toContain('<span class="is-ok">OK</span>');
   expect(diag).toContain('FAIL <span class="is-ok">0</span>');
