@@ -44,7 +44,7 @@ interface Env {
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 37;
+const MONITOR_REVISION = 38;
 
 export { MonitorGateway } from "./do";
 import { AUTH_COOKIE_MAX_AGE_S, authCookieExpiry, authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -141,7 +141,8 @@ const DASHBOARD = `<!DOCTYPE html>
   .meta { color: #999; font-size: .85em; }
   #loginstat, #authstat { font-size: 1.05em; }
   .is-ok, .login-ok { color: #7ee787; font-weight: bold; }
-  .login-ng { color: #ff7b72; font-weight: bold; }
+  .is-fail, .login-ng { color: #ff7b72; font-weight: bold; }
+  .is-warn { color: #e3b341; font-weight: bold; }
   button { margin-left: .5em; cursor: pointer; }
   #gated.off { opacity: .45; pointer-events: none; filter: grayscale(1); }
   .viewbtn.active, .tab.active { background: #2a4d2a; color: #fff; }
@@ -382,7 +383,16 @@ const DASHBOARD = `<!DOCTYPE html>
         return [esc(fields[0]) + '\\t<span class="is-ok">' + esc(fields[1]) + '</span>\\t' + esc(fields[2])];
       }).join('\\n');
     }
-    return esc(text).replace(/\\b(OK|FAIL([ \\t]+)0(?![\\w.]))\\b/g, (match, token, gap) =>
+    let output = esc(text);
+    if (name === 'vm') {
+      output = output.replace(/^((?:overlay|\\/dev\\/mapper\\/rv)(?:[ \\t]+\\S+){3}[ \\t]+)(\\d+)(?=%[ \\t]+\\S)/gm,
+        (_match, prefix, use) => {
+          const percent = Number(use);
+          const color = percent <= 50 ? 'is-ok' : percent < 80 ? 'is-warn' : 'is-fail';
+          return prefix + '<span class="' + color + '">' + use + '</span>';
+        });
+    }
+    return output.replace(/\\b(OK|FAIL([ \\t]+)0(?![\\w.]))\\b/g, (match, token, gap) =>
       gap === undefined ? '<span class="is-ok">OK</span>' : 'FAIL' + gap + '<span class="is-ok">0</span>');
   }
   function card(name) {
