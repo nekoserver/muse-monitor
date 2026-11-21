@@ -44,7 +44,7 @@ interface Env {
  * 25: ノードの起動試行を DO ストレージに記録し(REQ-SEC-044)、/health とダッシュボードに直近の試行を出す(REQ-SEC-045)。
  * 動きが変わる修正を入れたら上げる。
  */
-const MONITOR_REVISION = 38;
+const MONITOR_REVISION = 39;
 
 export { MonitorGateway } from "./do";
 import { AUTH_COOKIE_MAX_AGE_S, authCookieExpiry, authCookieValid, clearAuthCookie, makeAuthCookie } from "./auth-cookie";
@@ -138,6 +138,12 @@ const DASHBOARD = `<!DOCTYPE html>
   h1 { font-size: 1.2em; } h2 { font-size: 1.05em; }
   pre { background: #1b1b1b; border: 1px solid #333; border-radius: 6px;
         padding: .6em 1em; overflow-x: auto; white-space: pre-wrap; }
+  .pkg-table-wrap { margin: .6em 0; overflow-x: auto; }
+  .pkg-table-wrap table { width: 100%; border-collapse: collapse; }
+  .pkg-table-wrap th, .pkg-table-wrap td { border-bottom: 1px solid #333; padding: .45em .65em; text-align: left; }
+  .pkg-table-wrap thead { background: #242424; }
+  .pkg-table-wrap tbody tr:nth-child(even) { background: #191919; }
+  .pkg-table-wrap td { font-family: monospace; white-space: nowrap; }
   .meta { color: #999; font-size: .85em; }
   #loginstat, #authstat { font-size: 1.05em; }
   .is-ok, .login-ok { color: #7ee787; font-weight: bold; }
@@ -367,22 +373,55 @@ const DASHBOARD = `<!DOCTYPE html>
   setInterval(loadLoginState, 30000);
   setInterval(() => { if (loggedIn) loadStatus(); }, 5000);
   function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+  function formatPackages(text) {
+    const output = [];
+    const rows = [];
+    let legacySection = '';
+    function flushRows() {
+      if (!rows.length) return;
+      output.push('<div class="pkg-table-wrap"><table><thead><tr>' +
+        '<th scope="col">パッケージ</th><th scope="col">インストール済み</th><th scope="col">最新版候補</th>' +
+        '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>');
+      rows.length = 0;
+    }
+    for (const line of text.split(/\\r?\\n/)) {
+      if (!line.trim()) continue;
+      const group = /^== (.+) ==$/.exec(line);
+      if (group) {
+        flushRows();
+        legacySection = group[1] === 'Nix profile' ? 'nix' : group[1] === '.deb (dpkg)' ? 'deb' : '';
+        output.push('<h3>' + esc(group[1]) + '</h3>');
+        if (legacySection) output.push('<p class="meta">最新版候補: 未確認</p>');
+        continue;
+      }
+      let fields = line.split('\\t');
+      if (fields.length === 3 && fields[0] === 'パッケージ' && fields[1] === 'インストール済み') continue;
+      if (fields.length !== 3 && legacySection) {
+        const legacy = legacySection === 'nix'
+          ? /^(.+?)-([0-9]\\S*)$/.exec(line.replace(/^[a-z0-9]{32}-/, ''))
+          : /^([\\w.+:-]+)\\s+(\\S+)$/.exec(line);
+        if (legacy) fields = [legacy[1], legacy[2], '未確認'];
+      }
+      if (fields.length !== 3) {
+        flushRows();
+        output.push('<p>' + esc(line) + '</p>');
+        continue;
+      }
+      const [name, installed, candidate] = fields.map(field => field.trim());
+      const absent = /^(?:未インストール|未導入|なし|not installed|\\(none\\)|[-—])?$/i.test(installed);
+      if (packageFilter === 'installed' && absent) continue;
+      const version = esc(installed || '未インストール');
+      const current = installed === candidate && /^[0-9]/.test(installed);
+      rows.push('<tr><th scope="row">' + esc(name) + '</th><td>' +
+        (current ? '<span class="is-ok">' + version + '</span>' : version) +
+        '</td><td>' + esc(candidate || '未確認') + '</td></tr>');
+    }
+    flushRows();
+    return output.join('');
+  }
   function formatOutput(name, value) {
     const text = String(value ?? '（未取得）');
-    if (name === 'pkgs') {
-      if (/^== Nix profile ==/m.test(text) && !text.includes('パッケージ')) {
-        return '最新版候補: 未確認（受信側から候補の応答なし）' + '\\n\\n' + esc(text);
-      }
-      return text.split('\\n').flatMap(line => {
-        const fields = line.split('\\t');
-        if (fields.length !== 3) return [esc(line)];
-        const installed = fields[1].trim();
-        const absent = /^(?:未インストール|未導入|なし|not installed|\\(none\\)|[-—])?$/i.test(installed);
-        if (packageFilter === 'installed' && absent) return [];
-        if (fields[1] !== fields[2] || !/^[0-9]/.test(installed)) return [esc(line)];
-        return [esc(fields[0]) + '\\t<span class="is-ok">' + esc(fields[1]) + '</span>\\t' + esc(fields[2])];
-      }).join('\\n');
-    }
+    if (name === 'pkgs') return formatPackages(text);
     let output = esc(text);
     if (name === 'vm') {
       output = output.replace(/^((?:overlay|\\/dev\\/mapper\\/rv)(?:[ \\t]+\\S+){3}[ \\t]+)(\\d+)(?=%[ \\t]+\\S)/gm,
@@ -402,9 +441,10 @@ const DASHBOARD = `<!DOCTYPE html>
         '<option value="installed"' + (packageFilter === 'installed' ? ' selected' : '') + '>インストール済みのみ</option>' +
         '</select></label>'
       : '';
+    const outputTag = name === 'pkgs' ? 'div' : 'pre';
     return '<section class="card" id="sec-' + name + '"><h2>' + esc(TITLE[name]) +
-      ' <button type="button" onclick="load(\\'' + name + '\\')">再取得</button></h2>' + filter + '<pre id="data-' + name + '">' +
-      formatOutput(name, data[name]) + '</pre></section>';
+      ' <button type="button" onclick="load(\\'' + name + '\\')">再取得</button></h2>' + filter + '<' + outputTag + ' id="data-' + name + '">' +
+      formatOutput(name, data[name]) + '</' + outputTag + '></section>';
   }
   function renderSectionData(name) {
     const output = document.getElementById('data-' + name);

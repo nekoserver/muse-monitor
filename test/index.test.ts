@@ -52,7 +52,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: "ok", worker: "muse-monitor", revision: 38,
+      status: "ok", worker: "muse-monitor", revision: 39,
       version: { id: "ver-123", tag: "", timestamp: "2026-11-11T06:50:00Z" },
       node: publicState,
     });
@@ -65,7 +65,7 @@ describe("open routes", () => {
     const res = await worker.fetch(call("/health"), env);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 38, version: null, node: { error: expect.stringContaining("do down") } });
+    expect(body).toMatchObject({ status: "ok", worker: "muse-monitor", revision: 39, version: null, node: { error: expect.stringContaining("do down") } });
   });
 
   it("GET / returns the dashboard as HTML", async () => {
@@ -304,10 +304,17 @@ it("colors disk thresholds, OK, zero FAIL counts and exact installed-version mat
   expect(diag).toContain("FAIL 1");
   expect(diag).toContain("&lt;script&gt;");
   const packages = formatOutput("pkgs", "curl\t1.2\t1.2\nruby\t3.1\t3.2\nlocal\t1.2\t未確認");
-  expect(packages).toContain('curl\t<span class="is-ok">1.2</span>\t1.2');
-  expect(packages).toContain("ruby\t3.1\t3.2");
-  expect(packages).toContain("local\t1.2\t未確認");
-  expect(formatOutput("pkgs", "== Nix profile ==\ncurl-1.2")).toContain("最新版候補: 未確認");
+  expect(packages).toContain('<th scope="col">パッケージ</th>');
+  expect(packages).toContain('<th scope="col">インストール済み</th>');
+  expect(packages).toContain('<th scope="col">最新版候補</th>');
+  expect(packages).toContain('<th scope="row">curl</th><td><span class="is-ok">1.2</span></td><td>1.2</td>');
+  expect(packages).toContain('<th scope="row">ruby</th><td>3.1</td><td>3.2</td>');
+  expect(packages).toContain('<th scope="row">local</th><td>1.2</td><td>未確認</td>');
+  const legacy = formatOutput("pkgs", "== Nix profile ==\ncurl-1.2\n\n== .deb (dpkg) ==\ninstalled packages: 4\ngit 2.1");
+  expect(legacy).toContain("最新版候補: 未確認");
+  expect(legacy).toContain('<th scope="row">curl</th><td>1.2</td><td>未確認</td>');
+  expect(legacy).toContain('<th scope="row">git</th><td>2.1</td><td>未確認</td>');
+  expect(legacy.match(/<table>/g)).toHaveLength(2);
 });
 
 it("filters package rows by installation status without losing version formatting", async () => {
@@ -337,6 +344,8 @@ it("filters package rows by installation status without losing version formattin
     "nix-local\t未確認\t未確認",
   ].join("\n");
   expect(page.card("pkgs")).toContain('value="all" selected');
+  expect(page.card("pkgs")).toContain('<div id="data-pkgs">');
+  expect(page.card("pkgs")).not.toContain("<pre");
   expect(page.card("pkgs")).toContain("インストール済みのみ");
   expect(page.card("jobs")).not.toContain("インストール済みのみ");
   page.renderSectionData("pkgs");
@@ -346,7 +355,7 @@ it("filters package rows by installation status without losing version formattin
   page.setPackageFilter("installed");
   expect(output.innerHTML).not.toContain("candidate");
   expect(output.innerHTML).not.toContain("available");
-  expect(output.innerHTML).toContain('curl\t<span class="is-ok">1.2</span>');
+  expect(output.innerHTML).toContain('<th scope="row">curl</th><td><span class="is-ok">1.2</span></td>');
   expect(output.innerHTML).toContain("nix-local");
   expect(page.card("pkgs")).toContain('value="installed" selected');
 
