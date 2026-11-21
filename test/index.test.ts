@@ -38,6 +38,12 @@ const sign = (section: string, ts = Math.floor(Date.now() / 1000), secret = MONI
   "X-Muse-Signature": createHmac("sha256", secret).update(`${ts}.${section}`).digest("hex"),
 });
 
+/** Route-bound signature (REQ-SEC-066): the signed message names the route it was minted for. */
+const signRoute = (route: string, section: string, ts = Math.floor(Date.now() / 1000), secret = MONITOR_HMAC_SECRET) => ({
+  "X-Muse-Timestamp": String(ts),
+  "X-Muse-Signature": createHmac("sha256", secret).update(`${ts}.${route}.${section}`).digest("hex"),
+});
+
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("open routes", () => {
@@ -369,7 +375,7 @@ it("filters package rows by installation status without losing version formattin
 describe("HMAC routes", () => {
   it("accept a fresh signature for the same section", async () => {
     const { env, calls } = makeEnv();
-    expect((await worker.fetch(call("/api/hmac/status", sign("status")), env)).status).toBe(200);
+    expect((await worker.fetch(call("/api/hmac/status", signRoute("/api/hmac/status", "status")), env)).status).toBe(200);
     expect((await worker.fetch(call("/api/hmac/monitor/diag", sign("diag")), env)).status).toBe(200);
     const upper = sign("git");
     upper["X-Muse-Signature"] = upper["X-Muse-Signature"].toUpperCase();
@@ -382,7 +388,7 @@ describe("HMAC routes", () => {
     vi.setSystemTime(new Date("2026-11-10T00:00:00Z"));
     const now = Math.floor(Date.now() / 1000);
     const { env } = makeEnv();
-    const status = async (ts: number) => (await worker.fetch(call("/api/hmac/status", sign("status", ts)), env)).status;
+    const status = async (ts: number) => (await worker.fetch(call("/api/hmac/status", signRoute("/api/hmac/status", "status", ts)), env)).status;
     expect(await status(now - 300)).toBe(200);
     expect(await status(now + 300)).toBe(200);
     expect(await status(now - 301)).toBe(401);
@@ -391,11 +397,11 @@ describe("HMAC routes", () => {
 
   it.each([
     ["a signature for another section", () => sign("status"), "/api/hmac/monitor/execlog"],
-    ["the wrong secret", () => sign("status", undefined, "other-secret"), "/api/hmac/status"],
-    ["the bearer key as the secret", () => sign("status", undefined, WORKER_API_KEY), "/api/hmac/status"],
-    ["a non-hex signature", () => ({ ...sign("status"), "X-Muse-Signature": "z".repeat(64) }), "/api/hmac/status"],
-    ["a truncated signature", () => { const h = sign("status"); return { ...h, "X-Muse-Signature": h["X-Muse-Signature"].slice(0, 63) }; }, "/api/hmac/status"],
-    ["a non-numeric timestamp", () => ({ ...sign("status"), "X-Muse-Timestamp": "soon" }), "/api/hmac/status"],
+    ["the wrong secret", () => signRoute("/api/hmac/status", "status", undefined, "other-secret"), "/api/hmac/status"],
+    ["the bearer key as the secret", () => signRoute("/api/hmac/status", "status", undefined, WORKER_API_KEY), "/api/hmac/status"],
+    ["a non-hex signature", () => ({ ...signRoute("/api/hmac/status", "status"), "X-Muse-Signature": "z".repeat(64) }), "/api/hmac/status"],
+    ["a truncated signature", () => { const h = signRoute("/api/hmac/status", "status"); return { ...h, "X-Muse-Signature": h["X-Muse-Signature"].slice(0, 63) }; }, "/api/hmac/status"],
+    ["a non-numeric timestamp", () => ({ ...signRoute("/api/hmac/status", "status"), "X-Muse-Timestamp": "soon" }), "/api/hmac/status"],
     ["no headers", () => ({}), "/api/hmac/status"],
     ["the bearer header only", () => ({ Authorization: `Bearer ${WORKER_API_KEY}` }), "/api/hmac/status"],
   ])("reject %s with 401", async (_label, headers, path) => {
@@ -408,7 +414,7 @@ describe("HMAC routes", () => {
   it("rejects every signature when MONITOR_HMAC_SECRET is not set", async () => {
     const { env, calls } = makeEnv();
     (env as { MONITOR_HMAC_SECRET: string }).MONITOR_HMAC_SECRET = "";
-    expect((await worker.fetch(call("/api/hmac/status", sign("status", undefined, "")), env)).status).toBe(401);
+    expect((await worker.fetch(call("/api/hmac/status", signRoute("/api/hmac/status", "status", undefined, "")), env)).status).toBe(401);
     expect(calls).toEqual([]);
   });
 
@@ -428,7 +434,7 @@ describe("HMAC routes", () => {
         return Response.json({ from: "do", url });
       } }),
     };
-    const headers = sign("status");
+    const headers = signRoute("/api/hmac/status", "status");
     expect((await worker.fetch(call("/api/hmac/status", headers), env)).status).toBe(200);
     const second = await worker.fetch(call("/api/hmac/status", headers), env);
     expect(second.status).toBe(401);
@@ -444,10 +450,34 @@ describe("HMAC routes", () => {
       idFromName: (name: string) => name,
       get: () => ({ fetch: async (url: string) => { calls.push(url); if (url.includes("hmac-claim")) throw new Error("do down"); return Response.json({ from: "do", url }); } }),
     };
-    const res = await worker.fetch(call("/api/hmac/status", sign("status")), env);
+    const res = await worker.fetch(call("/api/hmac/status", signRoute("/api/hmac/status", "status")), env);
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "replay_check_unavailable" });
     expect(calls).toEqual(["http://do/hmac-claim"]);
+  });
+});
+
+describe("HMAC route binding (REQ-SEC-066/067)", () => {
+  it("a signature minted for the telemetry route /api/hmac/monitor/status does not open /api/hmac/status", async () => {
+    const { env, calls } = makeEnv();
+    const headers = signRoute("/api/hmac/monitor/status", "status");
+    expect((await worker.fetch(call("/api/hmac/monitor/status", headers), env)).status).toBe(200);
+    const res = await worker.fetch(call("/api/hmac/status", headers), env);
+    expect(res.status).toBe(401);
+    expect(calls.filter((u) => u === "http://do/status")).toHaveLength(0);
+  });
+
+  it("the old form is rejected on /api/hmac/status but still accepted on monitor routes during the transition", async () => {
+    const { env, calls } = makeEnv();
+    expect((await worker.fetch(call("/api/hmac/status", sign("status")), env)).status).toBe(401);
+    expect((await worker.fetch(call("/api/hmac/monitor/diag", sign("diag")), env)).status).toBe(200);
+    expect(calls).toEqual(["http://do/hmac-claim", "http://do/monitor/diag"]);
+  });
+
+  it("a route-bound signature works on its own monitor route", async () => {
+    const { env, calls } = makeEnv();
+    expect((await worker.fetch(call("/api/hmac/monitor/diag", signRoute("/api/hmac/monitor/diag", "diag")), env)).status).toBe(200);
+    expect(calls).toEqual(["http://do/hmac-claim", "http://do/monitor/diag"]);
   });
 });
 
